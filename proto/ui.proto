@@ -1,0 +1,127 @@
+syntax = "proto3";
+
+package protocol;
+
+service UI {
+    rpc Ping(PingRequest) returns (PingReply) {}
+    rpc AskRule (Connection) returns (Rule) {}
+    rpc Subscribe (ClientConfig) returns (ClientConfig) {}
+    rpc Notifications (stream NotificationReply) returns (stream Notification) {}
+}
+
+message Event {
+    string time = 1;
+    Connection connection = 2;
+    Rule rule = 3;
+    int64 unixnano = 4;
+}
+
+message Statistics {
+    string daemon_version = 1;
+    uint64 rules = 2;
+    uint64 uptime = 3;
+	uint64 dns_responses = 4;
+	uint64 connections  = 5;
+	uint64 ignored = 6;
+	uint64 accepted = 7;
+	uint64 dropped = 8;
+	uint64 rule_hits = 9;
+	uint64 rule_misses = 10;
+	map<string, uint64> by_proto = 11;
+	map<string, uint64> by_address = 12;
+	map<string, uint64> by_host = 13;
+	map<string, uint64> by_port = 14;
+	map<string, uint64> by_uid = 15;
+	map<string, uint64> by_executable = 16;
+    repeated Event events = 17;
+}
+
+message PingRequest {
+    uint64 id = 1;
+    Statistics stats = 2;
+}
+
+message PingReply {
+    uint64 id = 1;
+}
+
+message Connection {
+    string protocol = 1;
+    string src_ip = 2;
+    uint32 src_port = 3;
+    string dst_ip = 4;
+    string dst_host = 5;
+    uint32 dst_port = 6;
+    uint32 user_id = 7;
+    uint32 process_id = 8;
+    string process_path = 9;
+    string process_cwd = 10;
+    repeated string process_args = 11;
+    map<string, string> process_env = 12;
+}
+
+message Operator {
+    string type = 1;
+    string operand = 2;
+    string data = 3;
+    bool sensitive = 4;
+}
+
+message Rule {
+    string name = 1;
+    bool enabled = 2;
+    bool precedence = 3;
+    string action = 4;
+    string duration = 5;
+    Operator operator = 6;
+}
+
+enum Action {
+    NONE = 0;
+    LOAD_FIREWALL = 1;
+    UNLOAD_FIREWALL = 2;
+    CHANGE_CONFIG = 3;
+    ENABLE_RULE = 4;
+    DISABLE_RULE = 5;
+    DELETE_RULE = 6;
+    CHANGE_RULE = 7;
+    LOG_LEVEL = 8;
+    STOP = 9;
+    MONITOR_PROCESS = 10;
+    STOP_MONITOR_PROCESS = 11;
+}
+
+// client configuration sent on Subscribe()
+message ClientConfig {
+    uint64 id = 1;
+    string name = 2;
+    string version = 3;
+    bool isFirewallRunning = 4;
+    // daemon configuration as json string
+    string config = 5;
+    uint32 logLevel = 6;
+    repeated Rule rules = 7;
+}
+
+// notification sent to the clients (daemons)
+message Notification {
+    uint64 id = 1;
+    string clientName = 2;
+    string serverName = 3;
+    // CHANGE_CONFIG: 2, data: {"default_timeout": 1, ...}
+    Action type = 4;
+    string data = 5;   
+    repeated Rule rules = 6;
+}
+
+// notification reply sent to the server (GUI)
+message NotificationReply {
+    uint64 id = 1;
+    NotificationReplyCode code = 2;
+    string data = 3;
+}
+
+enum NotificationReplyCode {
+    OK = 0;
+    ERROR = 1;
+}

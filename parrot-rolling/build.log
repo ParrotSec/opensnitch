@@ -1,0 +1,6 @@
+debuild: fatal error at line 679:
+cannot find readable debian/changelog anywhere!
+Are you in the source code tree?
+debuild: fatal error at line 679:
+cannot find readable debian/changelog anywhere!
+Are you in the source code tree?
