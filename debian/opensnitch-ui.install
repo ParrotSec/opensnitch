@@ -1,1 +1,2 @@
 ui/debian/opensnitch-ui/usr/* usr/
+ui/resources/opensnitch_ui.desktop etc/xdg/autostart/
