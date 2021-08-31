@@ -5,16 +5,17 @@ import os
 import csv
 
 from PyQt5 import QtCore, QtGui, uic, QtWidgets
+from PyQt5.QtCore import QCoreApplication as QC
 
-import ui_pb2
-from config import Config
-from version import version
-from nodes import Nodes
-from dialogs.preferences import PreferencesDialog
-from dialogs.ruleseditor import RulesEditorDialog
-from dialogs.processdetails import ProcessDetailsDialog
-from customwidgets import ColorizedDelegate, ConnectionsTableModel
-from utils import Message
+from opensnitch import ui_pb2
+from opensnitch.config import Config
+from opensnitch.version import version
+from opensnitch.nodes import Nodes
+from opensnitch.dialogs.preferences import PreferencesDialog
+from opensnitch.dialogs.ruleseditor import RulesEditorDialog
+from opensnitch.dialogs.processdetails import ProcessDetailsDialog
+from opensnitch.customwidgets import ColorizedDelegate, ConnectionsTableModel
+from opensnitch.utils import Message
 
 DIALOG_UI_PATH = "%s/../res/stats.ui" % os.path.dirname(sys.modules[__name__].__file__)
 class StatsDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
@@ -39,6 +40,7 @@ class StatsDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
     COL_PROTO  = 4
     COL_PROCS  = 5
     COL_RULES  = 6
+    GENERAL_COL_NUM = 7
 
     # stats
     COL_WHAT   = 0
@@ -51,6 +53,9 @@ class StatsDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
     COL_R_DURATION = 5
     COL_R_OP_TYPE = 6
     COL_R_OP_OPERAND = 7
+
+    # procs
+    COL_PID = 6
 
     TAB_MAIN  = 0
     TAB_NODES = 1
@@ -67,6 +72,9 @@ class StatsDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
     RULES_TREE_PERMANENT = 0
     RULES_TREE_TEMPORARY = 1
 
+    RULES_COMBO_PERMANENT = 1
+    RULES_COMBO_TEMPORARY = 2
+
     RULES_TYPE_PERMANENT = 0
     RULES_TYPE_TEMPORARY = 1
 
@@ -75,6 +83,19 @@ class StatsDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
 
     # FIXME: don't translate, used only for default argument on _update_status_label
     FIREWALL_DISABLED = "Disabled"
+
+    # if the user clicks on an item of a table, it'll enter into the detail
+    # view. From there, deny further clicks on the items.
+    IN_DETAIL_VIEW = {
+        0: False,
+        1: False,
+        2: False,
+        3: False,
+        4: False,
+        5: False,
+        6: False,
+        7: False
+    }
 
     commonDelegateConf = {
             'deny':      RED,
@@ -234,28 +255,38 @@ class StatsDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
     def __init__(self, parent=None, address=None, db=None, dbname="db"):
         super(StatsDialog, self).__init__(parent)
         QtWidgets.QDialog.__init__(self, parent, QtCore.Qt.WindowStaysOnTopHint)
+
+        self._current_desktop = os.environ['XDG_CURRENT_DESKTOP'] if os.environ.get("XDG_CURRENT_DESKTOP") != None else None
+
         self.setWindowFlags(QtCore.Qt.Window)
         self.setupUi(self)
+        # columns names. Must be added here in order to names be translated.
+        self.COL_STR_NAME = QC.translate("stats", "Name", "This is a word, without spaces and symbols.")
+        self.COL_STR_ADDR = QC.translate("stats", "Address", "This is a word, without spaces and symbols.")
+        self.COL_STR_STATUS = QC.translate("stats", "Status", "This is a word, without spaces and symbols.")
+        self.COL_STR_HOSTNAME = QC.translate("stats", "Hostname", "This is a word, without spaces and symbols.")
+        self.COL_STR_VERSION = QC.translate("stats", "Version", "This is a word, without spaces and symbols.")
+        self.COL_STR_RULES_NUM = QC.translate("stats", "Rules", "This is a word, without spaces and symbols.")
+        self.COL_STR_TIME = QC.translate("stats", "Time", "This is a word, without spaces and symbols.")
+        self.COL_STR_ACTION = QC.translate("stats", "Action", "This is a word, without spaces and symbols.")
+        self.COL_STR_DURATION = QC.translate("stats", "Duration", "This is a word, without spaces and symbols.")
+        self.COL_STR_NODE = QC.translate("stats", "Node", "This is a word, without spaces and symbols.")
+        self.COL_STR_ENABLED = QC.translate("stats", "Enabled", "This is a word, without spaces and symbols.")
+        self.COL_STR_HITS = QC.translate("stats", "Hits", "This is a word, without spaces and symbols.")
+        self.COL_STR_PROTOCOL = QC.translate("stats", "Protocol", "This is a word, without spaces and symbols.")
+        self.COL_STR_PROCESS = QC.translate("stats", "Process", "This is a word, without spaces and symbols.")
+        self.COL_STR_PROC_ARGS = QC.translate("stats", "Args", "This is a word, without spaces and symbols.")
+        self.COL_STR_DESTINATION = QC.translate("stats", "Destination", "This is a word, without spaces and symbols.")
+        self.COL_STR_DST_IP = QC.translate("stats", "DstIP", "This is a word, without spaces and symbols.")
+        self.COL_STR_DST_HOST = QC.translate("stats", "DstHost", "This is a word, without spaces and symbols.")
+        self.COL_STR_DST_PORT = QC.translate("stats", "DstPort", "This is a word, without spaces and symbols.")
+        self.COL_STR_RULE = QC.translate("stats", "Rule", "This is a word, without spaces and symbols.")
+        self.COL_STR_UID = QC.translate("stats", "UserID", "This is a word, without spaces and symbols.")
+        self.COL_STR_LAST_CONNECTION = QC.translate("stats", "LastConnection", "This is a word, without spaces and symbols.")
 
-
-        # columns names
-        self.COL_STR_NAME = QtCore.QCoreApplication.translate("stats", "Name")
-        self.COL_STR_ADDR = QtCore.QCoreApplication.translate("stats", "Address")
-        self.COL_STR_STATUS = QtCore.QCoreApplication.translate("stats", "Status")
-        self.COL_STR_HOSTNAME = QtCore.QCoreApplication.translate("stats", "Hostname")
-        self.COL_STR_VERSION = QtCore.QCoreApplication.translate("stats", "Version")
-        self.COL_STR_RULES_NUM = QtCore.QCoreApplication.translate("stats", "Rules")
-        self.COL_STR_TIME = QtCore.QCoreApplication.translate("stats", "Time")
-        self.COL_STR_ACTION = QtCore.QCoreApplication.translate("stats", "Action")
-        self.COL_STR_DURATION = QtCore.QCoreApplication.translate("stats", "Duration")
-        self.COL_STR_NODE = QtCore.QCoreApplication.translate("stats", "Node")
-        self.COL_STR_ENABLED = QtCore.QCoreApplication.translate("stats", "Enabled")
-        self.COL_STR_HITS = QtCore.QCoreApplication.translate("stats", "Hits")
-        self.COL_STR_PROTOCOL = QtCore.QCoreApplication.translate("stats", "Protocol")
-
-        self.FIREWALL_STOPPED  = QtCore.QCoreApplication.translate("stats", "Not running")
-        self.FIREWALL_DISABLED = QtCore.QCoreApplication.translate("stats", "Disabled")
-        self.FIREWALL_RUNNING  = QtCore.QCoreApplication.translate("stats", "Running")
+        self.FIREWALL_STOPPED  = QC.translate("stats", "Not running")
+        self.FIREWALL_DISABLED = QC.translate("stats", "Disabled")
+        self.FIREWALL_RUNNING  = QC.translate("stats", "Running")
 
         self._db = db
         self._db_sqlite = self._db.get_db()
@@ -298,11 +329,14 @@ class StatsDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
         self.enableRuleCheck.clicked.connect(self._cb_enable_rule_toggled)
         self.editRuleButton.clicked.connect(self._cb_edit_rule_clicked)
         self.newRuleButton.clicked.connect(self._cb_new_rule_clicked)
+        self.cmdProcDetails.clicked.connect(self._cb_proc_details_clicked)
+        self.comboRulesFilter.currentIndexChanged.connect(self._cb_rules_filter_combo_changed)
+
         self.enableRuleCheck.setVisible(False)
         self.delRuleButton.setVisible(False)
         self.editRuleButton.setVisible(False)
         self.nodeRuleLabel.setVisible(False)
-        self.cmdProcDetails.clicked.connect(self._cb_proc_details_clicked)
+        self.comboRulesFilter.setVisible(False)
 
         self.TABLES[self.TAB_MAIN]['view'] = self._setup_table(QtWidgets.QTableView, self.eventsTable, "connections",
                 self.TABLES[self.TAB_MAIN]['display_fields'],
@@ -311,7 +345,8 @@ class StatsDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
                 delegate=self.TABLES[self.TAB_MAIN]['delegate'],
                 resize_cols=(),
                 model=ConnectionsTableModel(),
-                verticalScrollBar=self.connectionsTableScrollBar
+                verticalScrollBar=self.connectionsTableScrollBar,
+                limit=self._get_limit()
                 )
         self.TABLES[self.TAB_NODES]['view'] = self._setup_table(QtWidgets.QTableView, self.nodesTable, "nodes",
                 self.TABLES[self.TAB_NODES]['display_fields'],
@@ -374,6 +409,9 @@ class StatsDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
 
         self.TABLES[self.TAB_MAIN]['cmdCleanStats'] = self.cmdCleanSql
         self.TABLES[self.TAB_HOSTS]['cmdCleanStats'] = self.cmdCleanHosts
+        self.TABLES[self.TAB_RULES]['cmdCleanStats'] = self.cmdCleanRules
+        # the rules clean button is only for a particular rule, not all.
+        self.TABLES[self.TAB_RULES]['cmdCleanStats'].setVisible(False)
         self.TABLES[self.TAB_PROCS]['cmdCleanStats'] = self.cmdCleanProcs
         self.TABLES[self.TAB_ADDRS]['cmdCleanStats'] = self.cmdCleanAddrs
         self.TABLES[self.TAB_PORTS]['cmdCleanStats'] = self.cmdCleanPorts
@@ -394,11 +432,14 @@ class StatsDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
         self.TABLES[self.TAB_RULES]['view'].customContextMenuRequested.connect(self._cb_table_context_menu)
         for idx in range(1,8):
             self.TABLES[idx]['cmd'].hide()
+            self.TABLES[idx]['cmd'].setVisible(False)
             self.TABLES[idx]['cmd'].clicked.connect(lambda: self._cb_cmd_back_clicked(idx))
             if self.TABLES[idx]['cmdCleanStats'] != None:
                 self.TABLES[idx]['cmdCleanStats'].clicked.connect(lambda: self._cb_clean_sql_clicked(idx))
             self.TABLES[idx]['view'].doubleClicked.connect(self._cb_table_double_clicked)
             self.TABLES[idx]['label'].setStyleSheet('color: blue; font-size:9pt; font-weight:600;')
+            self.TABLES[idx]['label'].setVisible(False)
+
             if self.TABLES[idx]['filterLine'] != None:
                 self.TABLES[idx]['filterLine'].textChanged.connect(self._cb_events_filter_line_changed)
 
@@ -431,12 +472,23 @@ class StatsDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
         if QtGui.QIcon.hasThemeIcon("document-new") == False:
             self._configure_buttons_icons()
 
+    #Sometimes a maximized window which had been minimized earlier won't unminimize
+    #To workaround, we explicitely maximize such windows when unminimizing happens
+    def changeEvent(self, event):
+        if event.type() == QtCore.QEvent.WindowStateChange:
+            if event.oldState() & QtCore.Qt.WindowMinimized and event.oldState() & QtCore.Qt.WindowMaximized:
+                #a previously minimized maximized window ...
+                if self.windowState() ^ QtCore.Qt.WindowMinimized and self._current_desktop == "KDE":
+                    # is not minimized anymore, i.e. it was unminimized
+                    # docs: https://doc.qt.io/qt-5/qwidget.html#setWindowState
+                    self.setWindowState(self.windowState() & ~QtCore.Qt.WindowMinimized | QtCore.Qt.WindowActive)
+
     def showEvent(self, event):
         super(StatsDialog, self).showEvent(event)
         self._shown_trigger.emit()
-        window_title = QtCore.QCoreApplication.translate("stats", "OpenSnitch Network Statistics {0}").format(version)
+        window_title = QC.translate("stats", "OpenSnitch Network Statistics {0}").format(version)
         if self._address is not None:
-            window_title = QtCore.QCoreApplication.translate("stats", "OpenSnitch Network Statistics for {0}").format(self._address)
+            window_title = QC.translate("stats", "OpenSnitch Network Statistics for {0}").format(self._address)
             self.nodeLabel.setText(self._address)
         self._load_settings()
         self._add_rulesTree_nodes()
@@ -461,11 +513,11 @@ class StatsDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
                 self.TABLES[idx]['cmdCleanStats'].setIcon(self.style().standardIcon(getattr(QtWidgets.QStyle, "SP_DialogResetButton")))
 
     def _load_settings(self):
-        dialog_geometry = self._cfg.getSettings("statsDialog/geometry")
-        dialog_last_tab = self._cfg.getSettings("statsDialog/last_tab")
-        dialog_general_filter_text = self._cfg.getSettings("statsDialog/general_filter_text")
-        dialog_general_filter_action = self._cfg.getSettings("statsDialog/general_filter_action")
-        dialog_general_limit_results = self._cfg.getSettings("statsDialog/general_limit_results")
+        dialog_geometry = self._cfg.getSettings(Config.STATS_GEOMETRY)
+        dialog_last_tab = self._cfg.getSettings(Config.STATS_LAST_TAB)
+        dialog_general_filter_text = self._cfg.getSettings(Config.STATS_FILTER_TEXT)
+        dialog_general_filter_action = self._cfg.getSettings(Config.STATS_FILTER_ACTION)
+        dialog_general_limit_results = self._cfg.getSettings(Config.STATS_LIMIT_RESULTS)
         if dialog_geometry != None:
             self.restoreGeometry(dialog_geometry)
         if dialog_last_tab != None:
@@ -479,44 +531,32 @@ class StatsDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
             self.comboAction.setCurrentIndex(int(dialog_general_filter_action))
         if dialog_general_limit_results != None:
             # XXX: a little hack, because if the saved index is 0, the signal is not fired.
+            # XXX: this causes to fire the event twice
             self.limitCombo.setCurrentIndex(4)
             self.limitCombo.setCurrentIndex(int(dialog_general_limit_results))
 
-        rules_splitter_pos = self._cfg.getSettings("statsDialog/rules_splitter_pos")
+        rules_splitter_pos = self._cfg.getSettings(Config.STATS_RULES_SPLITTER_POS)
         if type(rules_splitter_pos) == QtCore.QByteArray:
             self.rulesSplitter.restoreState(rules_splitter_pos)
+            rulesSizes = self.rulesSplitter.sizes()
+            if self.IN_DETAIL_VIEW[self.TAB_RULES] == True:
+                self.comboRulesFilter.setVisible(False)
+            elif len(rulesSizes) > 0:
+                self.comboRulesFilter.setVisible(rulesSizes[0] == 0)
         else:
             w = self.rulesSplitter.width()
             self.rulesSplitter.setSizes([w/4, w/2])
 
-        header = self.eventsTable.horizontalHeader()
-        header.blockSignals(True);
-        eventsColState = self._cfg.getSettings("statsDialog/general_columns_state")
-        if type(eventsColState) == QtCore.QByteArray:
-            header.restoreState(eventsColState)
-        header.blockSignals(False);
+        self._restore_details_view_columns(self.eventsTable.horizontalHeader(), Config.STATS_GENERAL_COL_STATE)
+        self._restore_details_view_columns(self.nodesTable.horizontalHeader(), Config.STATS_NODES_COL_STATE)
+        self._restore_details_view_columns(self.rulesTable.horizontalHeader(), Config.STATS_RULES_COL_STATE)
 
-        nodesHeader = self.nodesTable.horizontalHeader()
-        nodesHeader.blockSignals(True);
-        nodesColState = self._cfg.getSettings("statsDialog/nodes_columns_state")
-        if type(nodesColState) == QtCore.QByteArray:
-            nodesHeader.restoreState(nodesColState)
-        nodesHeader.blockSignals(False);
-
-        rulesHeader = self.rulesTable.horizontalHeader()
-        rulesHeader.blockSignals(True);
-        rulesColState = self._cfg.getSettings("statsDialog/rules_columns_state")
-        if type(rulesColState) == QtCore.QByteArray:
-            rulesHeader.restoreState(rulesColState)
-        rulesHeader.blockSignals(False);
-
-
-        rulesTreeNodes_expanded = self._cfg.getBool("statsDialog/rules_tree_1_expanded")
+        rulesTreeNodes_expanded = self._cfg.getBool(Config.STATS_RULES_TREE_EXPANDED_1)
         if rulesTreeNodes_expanded != None:
             rules_tree_nodes = self._get_rulesTree_item(self.RULES_TREE_NODES)
             if rules_tree_nodes != None:
                 rules_tree_nodes.setExpanded(rulesTreeNodes_expanded)
-        rulesTreeApps_expanded = self._cfg.getBool("statsDialog/rules_tree_0_expanded")
+        rulesTreeApps_expanded = self._cfg.getBool(Config.STATS_RULES_TREE_EXPANDED_0)
         if rulesTreeApps_expanded != None:
             rules_tree_apps = self._get_rulesTree_item(self.RULES_TREE_APPS)
             if rules_tree_apps != None:
@@ -524,49 +564,37 @@ class StatsDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
 
 
     def _save_settings(self):
-        self._cfg.setSettings("statsDialog/geometry", self.saveGeometry())
-        self._cfg.setSettings("statsDialog/last_tab", self.tabWidget.currentIndex())
-        self._cfg.setSettings("statsDialog/general_limit_results", self.limitCombo.currentIndex())
-        self._cfg.setSettings("statsDialog/general_filter_text", self.filterLine.text())
+        self._cfg.setSettings(Config.STATS_GEOMETRY, self.saveGeometry())
+        self._cfg.setSettings(Config.STATS_LAST_TAB, self.tabWidget.currentIndex())
+        self._cfg.setSettings(Config.STATS_LIMIT_RESULTS, self.limitCombo.currentIndex())
+        self._cfg.setSettings(Config.STATS_FILTER_TEXT, self.filterLine.text())
 
         header = self.eventsTable.horizontalHeader()
-        self._cfg.setSettings("statsDialog/general_columns_state", header.saveState())
+        self._cfg.setSettings(Config.STATS_GENERAL_COL_STATE, header.saveState())
         nodesHeader = self.nodesTable.horizontalHeader()
-        self._cfg.setSettings("statsDialog/nodes_columns_state", nodesHeader.saveState())
+        self._cfg.setSettings(Config.STATS_NODES_COL_STATE, nodesHeader.saveState())
         rulesHeader = self.rulesTable.horizontalHeader()
-        self._cfg.setSettings("statsDialog/rules_columns_state", rulesHeader.saveState())
+        self._cfg.setSettings(Config.STATS_RULES_COL_STATE, rulesHeader.saveState())
 
         rules_tree_apps = self._get_rulesTree_item(self.RULES_TREE_APPS)
         if rules_tree_apps != None:
-            self._cfg.setSettings("statsDialog/rules_tree_0_expanded", rules_tree_apps.isExpanded())
+            self._cfg.setSettings(Config.STATS_RULES_TREE_EXPANDED_0, rules_tree_apps.isExpanded())
         rules_tree_nodes = self._get_rulesTree_item(self.RULES_TREE_NODES)
         if rules_tree_nodes != None:
-            self._cfg.setSettings("statsDialog/rules_tree_1_expanded", rules_tree_nodes.isExpanded())
+            self._cfg.setSettings(Config.STATS_RULES_TREE_EXPANDED_1, rules_tree_nodes.isExpanded())
 
 
     def _del_rule(self, rule_name, node_addr):
-        rule = ui_pb2.Rule(name=rule_name)
-        rule.enabled = False
-        rule.action = ""
-        rule.duration = ""
-        rule.operator.type = ""
-        rule.operator.operand = ""
-        rule.operator.data = ""
-
-        noti = ui_pb2.Notification(type=ui_pb2.DELETE_RULE, rules=[rule])
-        nid = self._nodes.send_notification(node_addr, noti, self._notification_callback)
+        nid, noti = self._nodes.delete_rule(rule_name, node_addr, self._notification_callback)
         self._notifications_sent[nid] = noti
-
-        self._db.remove("DELETE FROM rules WHERE name='%s' AND node='%s'" % (rule.name, node_addr))
-        self._refresh_active_table()
 
     def _cb_proc_details_clicked(self):
         table = self._tables[self.tabWidget.currentIndex()]
         nrows = table.model().rowCount()
         pids = {}
         for row in range(0, nrows):
-            pid = table.model().index(row, 6).data()
-            node = table.model().index(row, 1).data()
+            pid = table.model().index(row, self.COL_PID).data()
+            node = table.model().index(row, self.COL_NODE).data()
             if pid not in pids:
                 pids[pid] = node
 
@@ -574,16 +602,19 @@ class StatsDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
 
     @QtCore.pyqtSlot(ui_pb2.NotificationReply)
     def _cb_notification_callback(self, reply):
-        #print("[stats dialog] notification reply: ", reply.id, reply.code)
         if reply.id in self._notifications_sent:
             if reply.code == ui_pb2.ERROR:
                 Message.ok(
-                    QtCore.QCoreApplication.translate("stats", "<b>Error:</b><br><br>{0}").format(reply.data),
-                    "",
+                    QC.translate("stats",
+                                 "<b>Error:</b><br><br>",
+                                 "{0}").format(reply.data),
                     QtWidgets.QMessageBox.Warning)
 
         else:
-            print("[stats] unknown notification received: ", self._notifications_sent[reply.id].type)
+            Message.ok(
+                QC.translate("stats", "Warning:"),
+                "{0}".format(reply.data),
+                QtWidgets.QMessageBox.Warning)
 
     def _cb_tab_changed(self, index):
         if index == self.TAB_MAIN:
@@ -593,7 +624,9 @@ class StatsDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
                 self._add_rulesTree_nodes()
 
             if index == self.TAB_PROCS:
-                self.cmdProcDetails.setVisible(False)
+                # make the button visible depending if we're in the detail view
+                nrows = self._get_active_table().model().rowCount()
+                self.cmdProcDetails.setVisible(self.IN_DETAIL_VIEW[index] and nrows > 0)
 
             self._refresh_active_table()
 
@@ -603,23 +636,44 @@ class StatsDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
             # the only table with context menu for now is the rules table
             return
 
+        self._context_menu_active = True
+        refresh_table = self._configure_rules_contextual_menu(pos)
+        self._context_menu_active = False
+        if refresh_table:
+            self._refresh_active_table()
+
+    def _configure_rules_contextual_menu(self, pos):
+        cur_idx = self.tabWidget.currentIndex()
         table = self._get_active_table()
         model = table.model()
-        self._context_menu_active = True
 
         selection = table.selectionModel().selectedRows()
         if selection:
             menu = QtWidgets.QMenu()
+            durMenu = QtWidgets.QMenu(self.COL_STR_DURATION)
+            actionMenu = QtWidgets.QMenu(self.COL_STR_ACTION)
+
+            _actAllow = actionMenu.addAction(QC.translate("stats", "Allow"))
+            _actDeny = actionMenu.addAction(QC.translate("stats", "Deny"))
+            menu.addMenu(actionMenu)
+
+            _durAlways = durMenu.addAction(QC.translate("stats", "Always"))
+            _durUntilReboot = durMenu.addAction(QC.translate("stats", "Until reboot"))
+            _dur1h = durMenu.addAction(Config.DURATION_1h)
+            _dur30m = durMenu.addAction(Config.DURATION_30m)
+            _dur15m = durMenu.addAction(Config.DURATION_15m)
+            _dur5m = durMenu.addAction(Config.DURATION_5m)
+            menu.addMenu(durMenu)
 
             is_rule_enabled = model.index(selection[0].row(), self.COL_R_ENABLED).data()
-            menu_label_enable = QtCore.QCoreApplication.translate("stats", "Disable")
+            menu_label_enable = QC.translate("stats", "Disable")
             if is_rule_enabled == "False":
-                menu_label_enable = QtCore.QCoreApplication.translate("stats", "Enable")
+                menu_label_enable = QC.translate("stats", "Enable")
 
-            _menu_enable = menu.addAction(QtCore.QCoreApplication.translate("stats", menu_label_enable))
-            _menu_duplicate = menu.addAction(QtCore.QCoreApplication.translate("stats", "Duplicate"))
-            _menu_edit = menu.addAction(QtCore.QCoreApplication.translate("stats", "Edit"))
-            _menu_delete = menu.addAction(QtCore.QCoreApplication.translate("stats", "Delete"))
+            _menu_enable = menu.addAction(QC.translate("stats", menu_label_enable))
+            _menu_duplicate = menu.addAction(QC.translate("stats", "Duplicate"))
+            _menu_edit = menu.addAction(QC.translate("stats", "Edit"))
+            _menu_delete = menu.addAction(QC.translate("stats", "Delete"))
 
             # move away menu a few pixels to the right, to avoid clicking on it by mistake
             point = QtCore.QPoint(pos.x()+10, pos.y()+5)
@@ -628,11 +682,11 @@ class StatsDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
             model = table.model()
             if action == _menu_delete:
                 ret = Message.yes_no(
-                    QtCore.QCoreApplication.translate("stats", "    Your are about to delete this rule.    "),
-                    QtCore.QCoreApplication.translate("stats", "    Are you sure?"),
+                    QC.translate("stats", "    Your are about to delete this rule.    "),
+                    QC.translate("stats", "    Are you sure?"),
                     QtWidgets.QMessageBox.Warning)
                 if ret == QtWidgets.QMessageBox.Cancel:
-                    return
+                    return False
                 self._table_menu_delete(cur_idx, model, selection)
             elif action == _menu_edit:
                 self._table_menu_edit(cur_idx, model, selection)
@@ -640,9 +694,24 @@ class StatsDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
                 self._table_menu_enable(cur_idx, model, selection, is_rule_enabled)
             elif action == _menu_duplicate:
                 self._table_menu_duplicate(cur_idx, model, selection)
+            elif action == _durAlways:
+                self._table_menu_change_rule_field(cur_idx, model, selection, "duration", Config.DURATION_ALWAYS)
+            elif action == _dur1h:
+                self._table_menu_change_rule_field(cur_idx, model, selection, "duration", Config.DURATION_1h)
+            elif action == _dur30m:
+                self._table_menu_change_rule_field(cur_idx, model, selection, "duration", Config.DURATION_30m)
+            elif action == _dur15m:
+                self._table_menu_change_rule_field(cur_idx, model, selection, "duration", Config.DURATION_15m)
+            elif action == _dur5m:
+                self._table_menu_change_rule_field(cur_idx, model, selection, "duration", Config.DURATION_5m)
+            elif action == _durUntilReboot:
+                self._table_menu_change_rule_field(cur_idx, model, selection, "duration", Config.DURATION_UNTIL_RESTART)
+            elif action == _actAllow:
+                self._table_menu_change_rule_field(cur_idx, model, selection, "action", Config.ACTION_ALLOW)
+            elif action == _actDeny:
+                self._table_menu_change_rule_field(cur_idx, model, selection, "action", Config.ACTION_DENY)
 
-        self._context_menu_active = False
-        self._refresh_active_table()
+        return True
 
     def _table_menu_duplicate(self, cur_idx, model, selection):
 
@@ -669,6 +738,31 @@ class StatsDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
             if records != None and records.size() == -1:
                 noti = ui_pb2.Notification(type=ui_pb2.CHANGE_RULE, rules=[rule])
                 nid = self._nodes.send_notification(node_addr, noti, self._notification_callback)
+                if nid != None:
+                    self._notifications_sent[nid] = noti
+
+    def _table_menu_change_rule_field(self, cur_idx, model, selection, field, value):
+        for idx in selection:
+            rule_name = model.index(idx.row(), self.COL_R_NAME).data()
+            node_addr = model.index(idx.row(), self.COL_R_NODE).data()
+
+            records = self._get_rule(rule_name, node_addr)
+            rule = self._rules_dialog.get_rule_from_records(records)
+
+            self._db.update(table="rules", fields="{0}=?".format(field),
+                            values=[value], condition="name='{0}' AND node='{1}'".format(rule_name, node_addr),
+                            action_on_conflict="")
+
+            if field == "action":
+                rule.action = value
+            elif field == "duration":
+                rule.duration = value
+            elif field == "precedence":
+                rule.precedence = value
+
+            noti = ui_pb2.Notification(type=ui_pb2.CHANGE_RULE, rules=[rule])
+            nid = self._nodes.send_notification(node_addr, noti, self._notification_callback)
+            if nid != None:
                 self._notifications_sent[nid] = noti
 
     def _table_menu_enable(self, cur_idx, model, selection, is_rule_enabled):
@@ -683,12 +777,13 @@ class StatsDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
             rule_type = ui_pb2.DISABLE_RULE if is_rule_enabled == "True" else ui_pb2.ENABLE_RULE
 
             self._db.update(table="rules", fields="enabled=?",
-                            values=[rule_status], condition="name='{0}'".format(rule_name),
+                            values=[rule_status], condition="name='{0}' AND node='{1}'".format(rule_name, node_addr),
                             action_on_conflict="")
 
             noti = ui_pb2.Notification(type=rule_type, rules=[rule])
             nid = self._nodes.send_notification(node_addr, noti, self._notification_callback)
-            self._notifications_sent[nid] = noti
+            if nid != None:
+                self._notifications_sent[nid] = noti
 
     def _table_menu_delete(self, cur_idx, model, selection):
 
@@ -705,10 +800,10 @@ class StatsDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
             records = self._get_rule(name, node)
             if records == None or records == -1:
                 Message.ok("Rule error",
-                           QtCore.QCoreApplication.translate("stats", "Rule not found by that name and node"),
+                           QC.translate("stats", "Rule not found by that name and node"),
                            QtWidgets.QMessageBox.Warning)
                 return
-            self._rules_dialog.edit_rule(records, name)
+            self._rules_dialog.edit_rule(records, node)
             break
 
     def _cb_table_header_clicked(self, pos, sortIdx):
@@ -734,7 +829,7 @@ class StatsDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
         model = self.TABLES[cur_idx]['view'].model()
         qstr = None
         if cur_idx == StatsDialog.TAB_MAIN:
-            self._cfg.setSettings("statsDialog/general_filter_text", text)
+            self._cfg.setSettings(Config.STATS_FILTER_TEXT, text)
             self._set_events_query()
             return
 
@@ -752,18 +847,27 @@ class StatsDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
         if self.tabWidget.currentIndex() != self.TAB_MAIN:
             return
 
-        self._cfg.setSettings("statsDialog/general_filter_action", idx)
+        self._cfg.setSettings(Config.STATS_GENERAL_FILTER_ACTION, idx)
         self._set_events_query()
 
     def _cb_clean_sql_clicked(self, idx):
-        self._db.clean(self.TABLES[self.tabWidget.currentIndex()]['name'])
+        if self.tabWidget.currentIndex() == StatsDialog.TAB_RULES:
+            self._db.empty_rule(self.TABLES[self.tabWidget.currentIndex()]['label'].text())
+        else:
+            self._db.clean(self.TABLES[self.tabWidget.currentIndex()]['name'])
         self._refresh_active_table()
 
     def _cb_cmd_back_clicked(self, idx):
         cur_idx = self.tabWidget.currentIndex()
+        self.IN_DETAIL_VIEW[cur_idx] = False
+
         self._set_active_widgets(False)
         if cur_idx == StatsDialog.TAB_RULES:
             self._restore_rules_tab_widgets(True)
+            self._restore_details_view_columns(
+                self.TABLES[cur_idx]['view'].horizontalHeader(),
+                "{0}{1}".format(Config.STATS_VIEW_COL_STATE, cur_idx)
+            )
             # return here and now, the query is set via set_rules_filter()
             return
         elif cur_idx == StatsDialog.TAB_PROCS:
@@ -776,36 +880,59 @@ class StatsDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
             where_clause = self._get_filter_line_clause(cur_idx, filter_text)
 
         self.setQuery(model, self._db.get_query(self.TABLES[cur_idx]['name'], self.TABLES[cur_idx]['display_fields']) + where_clause + " " + self._get_order())
+        self._restore_details_view_columns(
+            self.TABLES[cur_idx]['view'].horizontalHeader(),
+            "{0}{1}".format(Config.STATS_VIEW_COL_STATE, cur_idx)
+        )
 
     def _cb_main_table_double_clicked(self, row):
         data = row.data()
         idx = row.column()
         cur_idx = 1
+
         if idx == StatsDialog.COL_NODE:
-            cur_idx = 1
+            cur_idx = self.TAB_NODES
             self.tabWidget.setCurrentIndex(cur_idx)
+            self._set_active_widgets(True, str(data))
             p, addr = self._nodes.get_addr(data)
             self._set_nodes_query(addr)
+
         elif idx == StatsDialog.COL_PROCS:
-            cur_idx = 4
+            cur_idx = self.TAB_PROCS
             self.tabWidget.setCurrentIndex(cur_idx)
-            self._set_process_tab_active(data)
+            self._set_active_widgets(True, str(data))
+            self._set_process_query(data)
+
         elif idx == StatsDialog.COL_RULES:
-            cur_idx = 2
+            cur_idx = self.TAB_RULES
+            self.IN_DETAIL_VIEW[cur_idx] = True
             self._set_rules_tab_active(row, cur_idx, self.COL_RULES, self.COL_NODE)
+            self._set_active_widgets(True, str(data))
+
         else:
             return
 
-        self._set_active_widgets(True, str(data))
+        self._restore_details_view_columns(
+            self.TABLES[cur_idx]['view'].horizontalHeader(),
+            "{0}{1}".format(Config.STATS_VIEW_DETAILS_COL_STATE, cur_idx)
+        )
 
     def _cb_table_double_clicked(self, row):
         cur_idx = self.tabWidget.currentIndex()
+        if self.IN_DETAIL_VIEW[cur_idx]:
+            return
+        self.IN_DETAIL_VIEW[cur_idx] = True
+
         data = row.data()
 
         if cur_idx == self.TAB_RULES:
             rule_name = row.model().index(row.row(), self.COL_R_NAME).data()
             self._set_active_widgets(True, rule_name)
             self._set_rules_tab_active(row, cur_idx, self.COL_R_NAME, self.COL_R_NODE)
+            self._restore_details_view_columns(
+                self.TABLES[cur_idx]['view'].horizontalHeader(),
+                "{0}{1}".format(Config.STATS_VIEW_DETAILS_COL_STATE, cur_idx)
+            )
             return
         if cur_idx == self.TAB_NODES:
             data = row.model().index(row.row(), self.COL_NODE).data()
@@ -828,8 +955,21 @@ class StatsDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
         elif cur_idx == StatsDialog.TAB_USERS:
             self._set_users_query(data)
 
+        self._restore_details_view_columns(
+            self.TABLES[cur_idx]['view'].horizontalHeader(),
+            "{0}{1}".format(Config.STATS_VIEW_DETAILS_COL_STATE, cur_idx)
+        )
+
     def _cb_prefs_clicked(self):
         self._prefs_dialog.show()
+
+    def _cb_rules_filter_combo_changed(self, idx):
+        if idx == self.RULES_TREE_APPS:
+            self._set_rules_filter()
+        elif idx == self.RULES_COMBO_PERMANENT:
+            self._set_rules_filter(self.RULES_TREE_APPS, self.RULES_TREE_PERMANENT)
+        elif idx == self.RULES_COMBO_TEMPORARY:
+            self._set_rules_filter(self.RULES_TREE_APPS, self.RULES_TREE_TEMPORARY)
 
     def _cb_rules_tree_item_clicked(self, item, col):
         """
@@ -845,7 +985,8 @@ class StatsDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
         self._set_rules_filter(parent_row, item_model.row(), item.text(0))
 
     def _cb_rules_splitter_moved(self, pos, index):
-        self._cfg.setSettings("statsDialog/rules_splitter_pos", self.rulesSplitter.saveState())
+        self.comboRulesFilter.setVisible(pos == 0)
+        self._cfg.setSettings(Config.STATS_RULES_SPLITTER_POS, self.rulesSplitter.saveState())
 
     def _cb_start_clicked(self):
         if self.daemon_connected == False:
@@ -853,14 +994,13 @@ class StatsDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
             self.startButton.setIcon(self.iconStart)
             return
 
+        self.update_interception_status(self.startButton.isChecked())
+        self._status_changed_trigger.emit(self.startButton.isChecked())
+
         if self.startButton.isChecked():
-            self._update_status_label(running=True, text=self.FIREWALL_RUNNING)
             nid, noti = self._nodes.start_interception(_callback=self._notification_callback)
-            self._status_changed_trigger.emit(False)
         else:
-            self._update_status_label(running=False, text=self.FIREWALL_DISABLED)
             nid, noti = self._nodes.stop_interception(_callback=self._notification_callback)
-            self._status_changed_trigger.emit(True)
 
         self._notifications_sent[nid] = noti
 
@@ -877,8 +1017,8 @@ class StatsDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
 
     def _cb_del_rule_clicked(self):
         ret = Message.yes_no(
-            QtCore.QCoreApplication.translate("stats", "    Your are about to delete this rule.    "),
-            QtCore.QCoreApplication.translate("stats", "    Are you sure?"),
+            QC.translate("stats", "    You are about to delete this rule.    "),
+            QC.translate("stats", "    Are you sure?"),
             QtWidgets.QMessageBox.Warning)
         if ret == QtWidgets.QMessageBox.Cancel:
             return
@@ -886,6 +1026,7 @@ class StatsDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
         self._del_rule(self.TABLES[self.tabWidget.currentIndex()]['label'].text(), self.nodeRuleLabel.text())
         self.TABLES[self.TAB_RULES]['cmd'].click()
         self.nodeRuleLabel.setText("")
+        self._refresh_active_table()
 
     def _cb_enable_rule_toggled(self, state):
         rule = ui_pb2.Rule(name=self.TABLES[self.tabWidget.currentIndex()]['label'].text())
@@ -902,6 +1043,15 @@ class StatsDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
         rule.enabled = state
         noti = ui_pb2.Notification(type=notType, rules=[rule])
         self._notification_trigger.emit(noti)
+
+    # must be called after setModel() or setQuery()
+    def _show_columns(self):
+        cols = self._cfg.getSettings(Config.STATS_SHOW_COLUMNS)
+        if cols == None:
+            return
+
+        for c in range(StatsDialog.GENERAL_COL_NUM):
+            self.eventsTable.setColumnHidden(c, str(c) not in cols)
 
     def _update_status_label(self, running=False, text=FIREWALL_DISABLED):
         self.statusLabel.setText("%12s" % text)
@@ -974,11 +1124,30 @@ class StatsDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
         if self.TABLES[cur_idx]['filterLine'] != None:
             self.TABLES[cur_idx]['filterLine'].setVisible(not state)
         if self.TABLES[cur_idx].get('cmdCleanStats') != None:
-            self.TABLES[cur_idx]['cmdCleanStats'].setVisible(not state)
+            if cur_idx == StatsDialog.TAB_RULES:
+                self.TABLES[cur_idx]['cmdCleanStats'].setVisible(state)
+            else:
+                self.TABLES[cur_idx]['cmdCleanStats'].setVisible(not state)
 
-    def _set_process_tab_active(self, data):
-        self.cmdProcDetails.setVisible(False)
-        self._set_process_query(data)
+        header = self.TABLES[cur_idx]['view'].horizontalHeader()
+        if state == True:
+            # going to normal state
+            self._cfg.setSettings("{0}{1}".format(Config.STATS_VIEW_COL_STATE, cur_idx), header.saveState())
+        else:
+            # going to details state
+            self._cfg.setSettings("{0}{1}".format(Config.STATS_VIEW_DETAILS_COL_STATE, cur_idx), header.saveState())
+
+    def _restore_details_view_columns(self, header, settings_key):
+        header.blockSignals(True);
+
+         #header = self.TABLES[cur_idx]['view'].horizontalHeader()
+            #col_state = self._cfg.getSettings("{0}{1}_details".format(Config.STATS_VIEW_DETAILS_COL_STATE, cur_idx))
+        col_state = self._cfg.getSettings(settings_key)
+
+        if type(col_state) == QtCore.QByteArray:
+            header.restoreState(col_state)
+
+        header.blockSignals(False);
 
     def _restore_rules_tab_widgets(self, active):
         self.delRuleButton.setVisible(not active)
@@ -988,9 +1157,16 @@ class StatsDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
         self.rulesTreePanel.setVisible(active)
 
         if active:
+            self.rulesSplitter.refresh()
+            self.comboRulesFilter.setVisible(self.rulesTreePanel.width() == 0)
+
             items = self.rulesTreePanel.selectedItems()
             if len(items) == 0:
                 self._set_rules_filter()
+                self._restore_details_view_columns(
+                    self.TABLES[self.TAB_RULES]['view'].horizontalHeader(),
+                    "{0}{1}".format(Config.STATS_VIEW_DETAILS_COL_STATE, self.TAB_RULES)
+                )
                 return
 
             item_m = self.rulesTreePanel.indexFromItem(items[0], 0)
@@ -1001,6 +1177,8 @@ class StatsDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
     def _set_rules_tab_active(self, row, cur_idx, name_idx, node_idx):
         data = row.data()
         self._restore_rules_tab_widgets(False)
+
+        self.comboRulesFilter.setVisible(False)
 
         r_name = row.model().index(row.row(), name_idx).data()
         node = row.model().index(row.row(), node_idx).data()
@@ -1018,9 +1196,9 @@ class StatsDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
         filter_text = self.filterLine.text()
         action = ""
         if self.comboAction.currentIndex() == 1:
-            action = "Action = \"" + Config.ACTION_ALLOW + "\""
+            action = "Action = \"{0}\"".format(Config.ACTION_ALLOW)
         elif self.comboAction.currentIndex() == 2:
-            action = "Action = \"" + Config.ACTION_DENY + "\""
+            action = "Action = \"{0}\"".format(Config.ACTION_DENY)
 
         # FIXME: use prepared statements
         if filter_text == "":
@@ -1045,23 +1223,32 @@ class StatsDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
         s = "AND c.src_ip='%s'" % data if '/' not in data else ''
         model = self._get_active_table().model()
         self.setQuery(model, "SELECT " \
-                "n.last_connection as LastConnection, " \
-                "c.action as %s, " \
-                "count(c.process) as Hits, " \
-                "c.uid as UserID, " \
-                "c.protocol as %s, " \
-                "c.dst_ip as DstIP, " \
-                "c.dst_host as DstHost, " \
-                "c.dst_port as DstPort, " \
-                "c.process || ' (' || c.pid || ')' as Process, " \
-                "c.process_args as Args, " \
+                "n.last_connection as {0}, " \
+                "c.action as {1}, " \
+                "count(c.process) as {2}, " \
+                "c.uid as {3}, " \
+                "c.protocol as {4}, " \
+                "c.dst_ip as {5}, " \
+                "c.dst_host as {6}, " \
+                "c.dst_port as {7}, " \
+                "c.process || ' (' || c.pid || ')' as {8}, " \
+                "c.process_args as {9}, " \
                 "c.process_cwd as CWD " \
             "FROM nodes as n, connections as c " \
-            "WHERE n.addr = '%s' %s GROUP BY Process, Args, UserID, DstIP, DstHost, DstPort, c.protocol, n.status %s" %
-                      (
-                          self.COL_STR_ACTION,
-                          self.COL_STR_PROTOCOL,
-                          data, s, self._get_order()))
+            "WHERE n.addr = '{10}' {11} GROUP BY {12}, c.process_args, c.uid, c.dst_ip, c.dst_host, c.dst_port, c.protocol, n.status {13}".format(
+                self.COL_STR_LAST_CONNECTION,
+                self.COL_STR_ACTION,
+                self.COL_STR_HITS,
+                self.COL_STR_UID,
+                self.COL_STR_PROTOCOL,
+                self.COL_STR_DST_IP,
+                self.COL_STR_DST_HOST,
+                self.COL_STR_DST_PORT,
+                self.COL_STR_PROCESS,
+                self.COL_STR_PROC_ARGS,
+                data, s,
+                self.COL_STR_PROCESS,
+                self._get_order()))
 
     def _set_rules_filter(self, parent_row=-1, item_row=0, what=""):
         section = self.FILTER_TREE_APPS
@@ -1111,74 +1298,96 @@ class StatsDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
 
         model = self._get_active_table().model()
         self.setQuery(model, "SELECT " \
-                "c.time as %s, " \
-                "r.node as %s, " \
-                "count(c.process) as Hits, " \
-                "c.uid as UserID, " \
-                "c.protocol as %s, " \
-                "c.dst_port as DstPort, " \
+                "c.time as {0}, " \
+                "r.node as {1}, " \
+                "count(c.process) as {2}, " \
+                "c.uid as {3}, " \
+                "c.protocol as {4}, " \
+                "c.dst_port as {5}, " \
                 "CASE c.dst_host WHEN ''" \
                 "   THEN c.dst_ip " \
                 "   ELSE c.dst_host " \
-                "END Destination, " \
-                "c.process as Process, " \
-                "c.process_args as Args, " \
+                "END {6}, " \
+                "c.process as {7}, " \
+                "c.process_args as {8}, " \
                 "c.process_cwd as CWD " \
             "FROM rules as r, connections as c " \
-            "WHERE %s %s r.name = c.rule AND r.node = c.node GROUP BY Process, Args, UserID, Destination, DstPort %s" %
-                      (
-                          self.COL_STR_TIME,
-                          self.COL_STR_NODE,
-                          self.COL_STR_PROTOCOL,
-                          node, rule_name, self._get_order()))
+            "WHERE {9} {10} r.name = c.rule AND r.node = c.node GROUP BY c.process, c.process_args, c.uid, {11}, c.dst_port {12}".format(
+                self.COL_STR_TIME,
+                self.COL_STR_NODE,
+                self.COL_STR_HITS,
+                self.COL_STR_UID,
+                self.COL_STR_PROTOCOL,
+                self.COL_STR_DST_PORT,
+                self.COL_STR_DESTINATION,
+                self.COL_STR_PROCESS,
+                self.COL_STR_PROC_ARGS,
+                node,
+                rule_name,
+                self.COL_STR_DESTINATION,
+                self._get_order()))
 
     def _set_hosts_query(self, data):
         model = self._get_active_table().model()
         self.setQuery(model, "SELECT " \
-                "c.time as %s, " \
-                "c.node as %s, " \
-                "count(c.process) as Hits, " \
-                "c.action as %s, " \
-                "c.uid as UserID, " \
-                "c.protocol as %s, " \
-                "c.dst_port as DstPort, " \
-                "c.dst_ip as DstIP, " \
-                "c.process || ' (' || c.pid || ')' as Process, " \
-                "c.process_args as Args, " \
+                "c.time as {0}, " \
+                "c.node as {1}, " \
+                "count(c.process) as {2}, " \
+                "c.action as {3}, " \
+                "c.uid as {4}, " \
+                "c.protocol as {5}, " \
+                "c.dst_port as {6}, " \
+                "c.dst_ip as {7}, " \
+                "c.process || ' (' || c.pid || ')' as {8}, " \
+                "c.process_args as {9}, " \
                 "c.process_cwd as CWD, " \
-                "c.rule as Rule " \
+                "c.rule as {10} " \
             "FROM hosts as h, connections as c " \
-            "WHERE h.what = '%s' AND c.dst_host = h.what GROUP BY c.pid, Process, Args, DstIP, DstPort, c.protocol, c.action, c.node %s" %
-                      (
+            "WHERE h.what = '{11}' AND c.dst_host = h.what GROUP BY c.pid, {12}, c.process_args, c.dst_ip, c.dst_port, c.protocol, c.action, c.node {13}".format(
                           self.COL_STR_TIME,
                           self.COL_STR_NODE,
+                          self.COL_STR_HITS,
                           self.COL_STR_ACTION,
+                          self.COL_STR_UID,
                           self.COL_STR_PROTOCOL,
-                          data, self._get_order()))
+                          self.COL_STR_DST_PORT,
+                          self.COL_STR_DST_IP,
+                          self.COL_STR_PROCESS,
+                          self.COL_STR_PROC_ARGS,
+                          self.COL_STR_RULE,
+                          data,
+                          self.COL_STR_PROCESS,
+                self._get_order()))
 
     def _set_process_query(self, data):
         model = self._get_active_table().model()
         self.setQuery(model, "SELECT " \
-                "c.time as %s, " \
-                "c.node as %s, " \
-                "count(c.dst_host) as Hits, " \
-                "c.action as %s, " \
-                "c.uid as UserID, " \
+                "c.time as {0}, " \
+                "c.node as {1}, " \
+                "count(c.dst_ip) as {2}, " \
+                "c.action as {3}, " \
+                "c.uid as {4}, " \
                 "CASE c.dst_host WHEN ''" \
                 "   THEN c.dst_ip || '  ->  ' || c.dst_port " \
                 "   ELSE c.dst_host || '  ->  ' || c.dst_port " \
-                "END Destination, " \
+                "END {5}, " \
                 "c.pid as PID, " \
-                "c.process_args as Args, " \
+                "c.process_args as {6}, " \
                 "c.process_cwd as CWD, " \
-                "c.rule as Rule " \
+                "c.rule as {7} " \
             "FROM procs as p, connections as c " \
-            "WHERE p.what = '%s' AND p.what = c.process GROUP BY c.dst_ip, c.dst_host, c.dst_port, UserID, c.action, c.node %s" %
-                      (
+            "WHERE p.what = '{8}' AND p.what = c.process " \
+                      "GROUP BY c.dst_ip, c.dst_host, c.dst_port, c.uid, c.action, c.node, c.pid, c.process_args {9}".format(
                           self.COL_STR_TIME,
                           self.COL_STR_NODE,
+                          self.COL_STR_HITS,
                           self.COL_STR_ACTION,
-                          data, self._get_order()))
+                          self.COL_STR_UID,
+                          self.COL_STR_DESTINATION,
+                          self.COL_STR_PROC_ARGS,
+                          self.COL_STR_RULE,
+                          data,
+                          self._get_order()))
 
         nrows = self._get_active_table().model().rowCount()
         self.cmdProcDetails.setVisible(nrows != 0)
@@ -1186,89 +1395,116 @@ class StatsDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
     def _set_addrs_query(self, data):
         model = self._get_active_table().model()
         self.setQuery(model, "SELECT " \
-                "c.time as %s, " \
-                "c.node as %s, " \
-                "count(c.dst_ip) as Hits, " \
-                "c.action as %s, " \
-                "c.uid as UserID, " \
-                "c.protocol as %s, " \
+                "c.time as {0}, " \
+                "c.node as {1}, " \
+                "count(c.dst_ip) as {2}, " \
+                "c.action as {3}, " \
+                "c.uid as {4}, " \
+                "c.protocol as {5}, " \
                 "CASE c.dst_host WHEN ''" \
                 "   THEN c.dst_ip " \
                 "   ELSE c.dst_host " \
-                "END Destination, " \
-                "c.dst_port as DstPort, " \
-                "c.process || ' (' || c.pid || ')' as Process, " \
-                "c.process_args as Args, " \
+                "END {6}, " \
+                "c.dst_port as {7}, " \
+                "c.process || ' (' || c.pid || ')' as {8}, " \
+                "c.process_args as {9}, " \
                 "c.process_cwd as CWD, " \
-                "c.rule as Rule " \
+                "c.rule as {10} " \
             "FROM addrs as a, connections as c " \
-            "WHERE a.what = '%s' AND c.dst_ip = a.what GROUP BY c.pid, Process, Args, DstPort, Destination, c.protocol, c.action, UserID, c.node %s" %
-                      (
+            "WHERE a.what = '{11}' AND c.dst_ip = a.what GROUP BY c.pid, {12}, c.process_args, c.dst_port, {13}, c.protocol, c.action, c.uid, c.node {14}".format(
                           self.COL_STR_TIME,
                           self.COL_STR_NODE,
+                          self.COL_STR_HITS,
                           self.COL_STR_ACTION,
+                          self.COL_STR_UID,
                           self.COL_STR_PROTOCOL,
-                          data, self._get_order()))
+                          self.COL_STR_DESTINATION,
+                          self.COL_STR_DST_PORT,
+                          self.COL_STR_PROCESS,
+                          self.COL_STR_PROC_ARGS,
+                          self.COL_STR_RULE,
+                          data,
+                          self.COL_STR_PROCESS,
+                          self.COL_STR_DESTINATION,
+                          self._get_order()))
 
     def _set_ports_query(self, data):
         model = self._get_active_table().model()
         self.setQuery(model, "SELECT " \
-                "c.time as %s, " \
-                "c.node as %s, " \
-                "count(c.dst_ip) as Hits, " \
-                "c.action as %s, " \
-                "c.uid as UserID, " \
-                "c.protocol as %s, " \
-                "c.dst_ip as DstIP, " \
+                "c.time as {0}, " \
+                "c.node as {1}, " \
+                "count(c.dst_ip) as {2}, " \
+                "c.action as {3}, " \
+                "c.uid as {4}, " \
+                "c.protocol as {5}, " \
+                "c.dst_ip as {6}, " \
                 "CASE c.dst_host WHEN ''" \
                 "   THEN c.dst_ip " \
                 "   ELSE c.dst_host " \
-                "END Destination, " \
-                "c.process || ' (' || c.pid || ')' as Process, " \
-                "c.process_args as Args, " \
+                "END {7}, " \
+                "c.process || ' (' || c.pid || ')' as {8}, " \
+                "c.process_args as {9}, " \
                 "c.process_cwd as CWD, " \
-                "c.rule as Rule " \
+                "c.rule as {10} " \
             "FROM ports as p, connections as c " \
-            "WHERE p.what = '%s' AND c.dst_port = p.what GROUP BY c.pid, Process, Args, Destination, DstIP, c.protocol, c.action, UserID, c.node %s" %
-                      (
+            "WHERE p.what = '{11}' AND c.dst_port = p.what GROUP BY c.pid, {12}, c.process_args, {13}, c.dst_ip, c.protocol, c.action, c.uid, c.node {14}".format(
                           self.COL_STR_TIME,
                           self.COL_STR_NODE,
+                          self.COL_STR_HITS,
                           self.COL_STR_ACTION,
+                          self.COL_STR_UID,
                           self.COL_STR_PROTOCOL,
-                          data, self._get_order()))
+                          self.COL_STR_DST_IP,
+                          self.COL_STR_DESTINATION,
+                          self.COL_STR_PROCESS,
+                          self.COL_STR_PROC_ARGS,
+                          self.COL_STR_RULE,
+                          data,
+                          self.COL_STR_PROCESS,
+                          self.COL_STR_DESTINATION,
+                          self._get_order()))
 
     def _set_users_query(self, data):
         model = self._get_active_table().model()
         self.setQuery(model, "SELECT " \
-                "c.time as %s, " \
-                "c.node as %s, " \
-                "count(c.dst_ip) as Hits, " \
-                "c.action as %s, " \
-                "c.protocol as %s, " \
-                "c.dst_ip as DstIP, " \
+                "c.time as {0}, " \
+                "c.node as {1}, " \
+                "count(c.dst_ip) as {2}, " \
+                "c.action as {3}, " \
+                "c.protocol as {4}, " \
+                "c.dst_ip as {5}, " \
                 "CASE c.dst_host WHEN ''" \
                 "   THEN c.dst_ip " \
                 "   ELSE c.dst_host " \
-                "END Destination, " \
-                "c.dst_port as DstPort, " \
-                "c.process || ' (' || c.pid || ')' as Process, " \
-                "c.process_args as Args, " \
+                "END {6}, " \
+                "c.dst_port as {7}, " \
+                "c.process || ' (' || c.pid || ')' as {8}, " \
+                "c.process_args as {9}, " \
                 "c.process_cwd as CWD, " \
-                "c.rule as Rule " \
+                "c.rule as {10} " \
             "FROM users as u, connections as c " \
-            "WHERE u.what = '%s' AND u.what LIKE '%%(' || c.uid || ')' GROUP BY c.pid, Process, Args, DstIP, Destination, DstPort, c.protocol, c.action, c.node %s" %
-                      (
+            "WHERE u.what = '{11}' AND u.what LIKE '%%(' || c.uid || ')' GROUP BY c.pid, {12}, c.process_args, c.dst_ip, {13}, c.dst_port, c.protocol, c.action, c.node {14}".format(
                           self.COL_STR_TIME,
                           self.COL_STR_NODE,
+                          self.COL_STR_HITS,
                           self.COL_STR_ACTION,
                           self.COL_STR_PROTOCOL,
-                          data, self._get_order()))
+                          self.COL_STR_DST_IP,
+                          self.COL_STR_DESTINATION,
+                          self.COL_STR_DST_PORT,
+                          self.COL_STR_PROCESS,
+                          self.COL_STR_PROC_ARGS,
+                          self.COL_STR_RULE,
+                          data,
+                          self.COL_STR_PROCESS,
+                          self.COL_STR_DESTINATION,
+                          self._get_order()))
 
     def _on_save_clicked(self):
         tab_idx = self.tabWidget.currentIndex()
 
         filename = QtWidgets.QFileDialog.getSaveFileName(self,
-                    QtCore.QCoreApplication.translate("stats", 'Save as CSV'),
+                    QC.translate("stats", 'Save as CSV'),
                     self._file_names[tab_idx],
                     'All Files (*);;CSV Files (*.csv)')[0].strip()
         if filename == '':
@@ -1314,7 +1550,17 @@ class StatsDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
             for _, col in enumerate(resize_cols):
                 header.setSectionResizeMode(col, QtWidgets.QHeaderView.ResizeToContents)
 
+        cur_idx = self.tabWidget.currentIndex()
+        self._cfg.setSettings("{0}{1}".format(Config.STATS_VIEW_DETAILS_COL_STATE, cur_idx), header.saveState())
         return tableWidget
+
+    def update_interception_status(self, enabled):
+        self.startButton.setDown(enabled)
+        self.startButton.setChecked(enabled)
+        if enabled:
+            self._update_status_label(running=True, text=self.FIREWALL_RUNNING)
+        else:
+            self._update_status_label(running=False, text=self.FIREWALL_DISABLED)
 
     # launched from a thread
     def update(self, is_local=True, stats=None, need_query_update=True):
@@ -1377,12 +1623,15 @@ class StatsDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
             super(StatsDialog, self).keyPressEvent(event)
 
     def setQuery(self, model, q):
+        if self._context_menu_active == True:
+            return
         with self._lock:
             try:
-                if self._context_menu_active == False:
-                    model.query().clear()
-                    model.setQuery(q, self._db_sqlite)
-                    if model.lastError().isValid():
-                        print("setQuery() error: ", model.lastError().text())
+                model.query().clear()
+                model.setQuery(q, self._db_sqlite)
+                if model.lastError().isValid():
+                    print("setQuery() error: ", model.lastError().text())
             except Exception as e:
                 print(self._address, "setQuery() exception: ", e)
+            finally:
+                self._show_columns()

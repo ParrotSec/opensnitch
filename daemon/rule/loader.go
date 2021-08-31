@@ -54,6 +54,13 @@ func (l *Loader) NumRules() int {
 	return len(l.rules)
 }
 
+// GetAll returns the loaded rules.
+func (l *Loader) GetAll() map[string]*Rule {
+	l.RLock()
+	defer l.RUnlock()
+	return l.rules
+}
+
 // Load loads rules files from disk.
 func (l *Loader) Load(path string) error {
 	if core.Exists(path) == false {
@@ -66,52 +73,116 @@ func (l *Loader) Load(path string) error {
 		return fmt.Errorf("Error globbing '%s': %s", expr, err)
 	}
 
-	l.Lock()
-	defer l.Unlock()
-
 	l.path = path
 	if len(l.rules) == 0 {
 		l.rules = make(map[string]*Rule)
 	}
-	diskRules := make(map[string]string)
 
 	for _, fileName := range matches {
 		log.Debug("Reading rule from %s", fileName)
-		raw, err := ioutil.ReadFile(fileName)
-		if err != nil {
-			return fmt.Errorf("Error while reading %s: %s", fileName, err)
-		}
 
-		var r Rule
-
-		err = json.Unmarshal(raw, &r)
-		if err != nil {
-			log.Error("Error parsing rule from %s: %s", fileName, err)
+		if err := l.loadRule(fileName); err != nil {
+			log.Warning("%s", err)
 			continue
 		}
-
-		r.Operator.Compile()
-		diskRules[r.Name] = r.Name
-
-		log.Debug("Loaded rule from %s: %s", fileName, r.String())
-		l.rules[r.Name] = &r
 	}
-	for ruleName, inMemoryRule := range l.rules {
-		if _, ok := diskRules[ruleName]; ok == false {
-			if inMemoryRule.Duration == Always {
-				log.Debug("Rule deleted from disk, updating rules list: %s", ruleName)
-				delete(l.rules, ruleName)
-			}
-		}
-	}
-
-	l.sortRules()
 
 	if l.liveReload && l.liveReloadRunning == false {
 		go l.liveReloadWorker()
 	}
 
 	return nil
+}
+
+func (l *Loader) loadRule(fileName string) error {
+	raw, err := ioutil.ReadFile(fileName)
+	if err != nil {
+		return fmt.Errorf("Error while reading %s: %s", fileName, err)
+	}
+	l.Lock()
+	defer l.Unlock()
+
+	var r Rule
+	err = json.Unmarshal(raw, &r)
+	if err != nil {
+		return fmt.Errorf("Error parsing rule from %s: %s", fileName, err)
+	}
+	raw = nil
+
+	if oldRule, found := l.rules[r.Name]; found {
+		l.cleanListsRule(oldRule)
+	}
+
+	if r.Enabled {
+		if err := r.Operator.Compile(); err != nil {
+			log.Warning("Operator.Compile() error: %s: %s", err, r.Operator.Data)
+		}
+		if r.Operator.Type == List {
+			for i := 0; i < len(r.Operator.List); i++ {
+				if err := r.Operator.List[i].Compile(); err != nil {
+					log.Warning("Operator.Compile() error: %s: ", err)
+				}
+			}
+		}
+	}
+	if oldRule, found := l.rules[r.Name]; found {
+		l.deleteOldRuleFromDisk(oldRule, &r)
+	}
+
+	log.Debug("Loaded rule from %s: %s", fileName, r.String())
+	l.rules[r.Name] = &r
+	l.sortRules()
+
+	if l.isTemporary(&r) {
+		err = l.scheduleTemporaryRule(r)
+	}
+
+	return nil
+}
+
+// deleteRule deletes a rule from memory if it has been deleted from disk.
+// This is only called if fsnotify's Remove event is fired, thus it doesn't
+// have to delete temporary rules (!Always).
+func (l *Loader) deleteRule(filePath string) {
+	fileName := filepath.Base(filePath)
+	ruleName := fileName[:len(fileName)-5]
+
+	l.RLock()
+	rule, found := l.rules[ruleName]
+	delRule := found && rule.Duration == Always
+	l.RUnlock()
+	if delRule {
+		l.Delete(ruleName)
+	}
+}
+
+func (l *Loader) deleteRuleFromDisk(ruleName string) error {
+	path := fmt.Sprint(l.path, "/", ruleName, ".json")
+	return os.Remove(path)
+}
+
+// deleteOldRuleFromDisk deletes a rule from disk if the Duration changes
+// from Always (saved on disk), to !Always (temporary).
+func (l *Loader) deleteOldRuleFromDisk(oldRule, newRule *Rule) {
+	if oldRule.Duration == Always && newRule.Duration != Always {
+		if err := l.deleteRuleFromDisk(oldRule.Name); err != nil {
+			log.Error("Error deleting old rule from disk: %s", oldRule.Name)
+		}
+	}
+}
+
+// cleanListsRule erases the list of domains of an Operator of type Lists
+func (l *Loader) cleanListsRule(oldRule *Rule) {
+	if oldRule.Operator.Type == Lists {
+		oldRule.Operator.StopMonitoringLists()
+	} else if oldRule.Operator.Type == List {
+		for i := 0; i < len(oldRule.Operator.List); i++ {
+			if oldRule.Operator.List[i].Type == Lists {
+				oldRule.Operator.List[i].StopMonitoringLists()
+				break
+			}
+		}
+	}
 }
 
 func (l *Loader) liveReloadWorker() {
@@ -128,12 +199,19 @@ func (l *Loader) liveReloadWorker() {
 		select {
 		case event := <-l.watcher.Events:
 			// a new rule json file has been created or updated
-			if (event.Op&fsnotify.Write == fsnotify.Write) || (event.Op&fsnotify.Remove == fsnotify.Remove) {
+			if event.Op&fsnotify.Write == fsnotify.Write {
 				if strings.HasSuffix(event.Name, ".json") {
 					log.Important("Ruleset changed due to %s, reloading ...", path.Base(event.Name))
-					if err := l.Reload(); err != nil {
-						log.Error("%s", err)
+					if err := l.loadRule(event.Name); err != nil {
+						log.Warning("%s", err)
 					}
+				}
+			} else if event.Op&fsnotify.Remove == fsnotify.Remove {
+				if strings.HasSuffix(event.Name, ".json") {
+					log.Important("Rule deleted %s", path.Base(event.Name))
+					// we only need to delete from memory rules of type Always,
+					// because the Remove event is of a file, i.e.: Duration == Always
+					l.deleteRule(event.Name)
 				}
 			}
 		case err := <-l.watcher.Errors:
@@ -142,16 +220,8 @@ func (l *Loader) liveReloadWorker() {
 	}
 }
 
-// Reload reloads the rules from disk.
-func (l *Loader) Reload() error {
-	return l.Load(l.path)
-}
-
-// GetAll returns the loaded rules.
-func (l *Loader) GetAll() map[string]*Rule {
-	l.RLock()
-	defer l.RUnlock()
-	return l.rules
+func (l *Loader) isTemporary(r *Rule) bool {
+	return r.Duration != Restart && r.Duration != Always && r.Duration != Once
 }
 
 func (l *Loader) isUniqueName(name string) bool {
@@ -189,49 +259,70 @@ func (l *Loader) addUserRule(rule *Rule) {
 }
 
 func (l *Loader) replaceUserRule(rule *Rule) (err error) {
-	if oldRule, found := l.rules[rule.Name]; found {
-		// The rule has changed from Always (saved on disk) to !Always (temporary), so
+	l.Lock()
+	oldRule, found := l.rules[rule.Name]
+	l.Unlock()
+
+	if found {
+		// If the rule has changed from Always (saved on disk) to !Always (temporary),
 		// we need to delete the rule from disk and keep it in memory.
-		if oldRule.Duration == Always && rule.Duration != Always {
-			// Log the error if we can't delete the rule from disk, but don't exit here,
-			// modify the existing rule to a non-persistent rule.
-			if err = l.Delete(oldRule.Name); err != nil {
-				log.Error("Error deleting old rule from disk: %s", oldRule.Name)
+		l.deleteOldRuleFromDisk(oldRule, rule)
+
+		// delete loaded lists, if this is a rule of type Lists
+		l.cleanListsRule(oldRule)
+	}
+
+	if rule.Enabled {
+		if err := rule.Operator.Compile(); err != nil {
+			log.Warning("Operator.Compile() error: %s: %s", err, rule.Operator.Data)
+		}
+
+		if rule.Operator.Type == List {
+			// TODO: use List protobuf object instead of un/marshalling to/from json
+			if err = json.Unmarshal([]byte(rule.Operator.Data), &rule.Operator.List); err != nil {
+				return fmt.Errorf("Error loading rule of type list: %s", err)
+			}
+
+			for i := 0; i < len(rule.Operator.List); i++ {
+				if err := rule.Operator.List[i].Compile(); err != nil {
+					log.Warning("Operator.Compile() error: %s: ", err)
+				}
 			}
 		}
 	}
-	// TODO: allow to delete rules from disk if the user changes the name of the rule.
-
 	l.Lock()
 	l.rules[rule.Name] = rule
 	l.sortRules()
 	l.Unlock()
-	if rule.Operator.Type == List {
-		// TODO: use List protobuf object instead of un/marshalling to/from json
-		if err = json.Unmarshal([]byte(rule.Operator.Data), &rule.Operator.List); err != nil {
-			return fmt.Errorf("Error loading rule of type list: %s", err)
-		}
+
+	if l.isTemporary(rule) {
+		err = l.scheduleTemporaryRule(*rule)
 	}
 
-	if rule.Duration == Restart || rule.Duration == Always || rule.Duration == Once {
-		return err
-	}
+	return err
+}
 
-	var tTime time.Duration
-	tTime, err = time.ParseDuration(string(rule.Duration))
+func (l *Loader) scheduleTemporaryRule(rule Rule) error {
+	tTime, err := time.ParseDuration(string(rule.Duration))
 	if err != nil {
 		return err
 	}
 
 	time.AfterFunc(tTime, func() {
 		l.Lock()
-		log.Info("Temporary rule expired: %s - %s", rule.Name, rule.Duration)
-		delete(l.rules, rule.Name)
-		l.sortRules()
-		l.Unlock()
-	})
+		defer l.Unlock()
 
-	return err
+		log.Info("Temporary rule expired: %s - %s", rule.Name, rule.Duration)
+		if newRule, found := l.rules[rule.Name]; found {
+			if newRule.Duration != rule.Duration {
+				log.Debug("%s temporary rule expired, but has new Duration, old: %s, new: %s", rule.Name, rule.Duration, newRule.Duration)
+				return
+			}
+			delete(l.rules, rule.Name)
+			l.sortRules()
+		}
+	})
+	return nil
 }
 
 // Add adds a rule to the list of rules, and optionally saves it to disk.
@@ -274,7 +365,7 @@ func (l *Loader) Save(rule *Rule, path string) error {
 	return nil
 }
 
-// Delete deletes a rule from the list.
+// Delete deletes a rule from the list by name.
 // If the duration is Always (i.e: saved on disk), it'll attempt to delete
 // it from disk.
 func (l *Loader) Delete(ruleName string) error {
@@ -285,6 +376,7 @@ func (l *Loader) Delete(ruleName string) error {
 	if rule == nil {
 		return nil
 	}
+	l.cleanListsRule(rule)
 
 	delete(l.rules, ruleName)
 	l.sortRules()
@@ -294,8 +386,7 @@ func (l *Loader) Delete(ruleName string) error {
 	}
 
 	log.Info("Delete() rule: %s", rule)
-	path := fmt.Sprint(l.path, "/", ruleName, ".json")
-	return os.Remove(path)
+	return l.deleteRuleFromDisk(ruleName)
 }
 
 // FindFirstMatch will try match the connection against the existing rule set.

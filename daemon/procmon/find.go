@@ -23,7 +23,7 @@ func sortPidsByTime(fdList []os.FileInfo) []os.FileInfo {
 // If the inode is found, the cache is updated ans sorted.
 func inodeFound(pidsPath, expect, inodeKey string, inode, pid int) bool {
 	fdPath := fmt.Sprint(pidsPath, pid, "/fd/")
-	fdList := lookupPidDescriptors(fdPath)
+	fdList := lookupPidDescriptors(fdPath, pid)
 	if fdList == nil {
 		return false
 	}
@@ -31,8 +31,8 @@ func inodeFound(pidsPath, expect, inodeKey string, inode, pid int) bool {
 	for idx := 0; idx < len(fdList); idx++ {
 		descLink := fmt.Sprint(fdPath, fdList[idx])
 		if link, err := os.Readlink(descLink); err == nil && link == expect {
-			inodesCache[inodeKey] = &Inode{FdPath: descLink, Pid: pid}
-			addProcEntry(fdPath, fdList, pid)
+			inodesCache.add(inodeKey, descLink, pid)
+			pidsCache.add(fdPath, fdList, pid)
 			return true
 		}
 	}
@@ -57,11 +57,16 @@ func lookupPidInProc(pidsPath, expect, inodeKey string, inode int) int {
 // lookupPidDescriptors returns the list of descriptors inside
 // /proc/<pid>/fd/
 // TODO: search in /proc/<pid>/task/<tid>/fd/ .
-func lookupPidDescriptors(fdPath string) []string {
+func lookupPidDescriptors(fdPath string, pid int) []string {
 	f, err := os.Open(fdPath)
 	if err != nil {
 		return nil
 	}
+	// This is where most of the time is wasted when looking for PIDs.
+	// long running processes like firefox/chrome tend to have a lot of descriptor
+	// references that points to non existent files on disk, but that remains in
+	// memory (those with " (deleted)").
+	// This causes to have to iterate over 300 to 700 items, that are not sockets.
 	fdList, err := f.Readdir(-1)
 	f.Close()
 	if err != nil {
