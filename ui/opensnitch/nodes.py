@@ -3,8 +3,9 @@ from datetime import datetime
 import time
 import json
 
-import ui_pb2
-from database import Database
+from opensnitch import ui_pb2
+from opensnitch.database import Database
+from opensnitch.config import Config
 
 class Nodes():
     __instance = None
@@ -37,17 +38,17 @@ class Nodes():
                         'online':        True,
                         'last_seen':     datetime.now()
                         }
-                self.add_data(addr, client_config)
-                return self._nodes[addr]
+            else:
+                self._nodes[addr]['last_seen'] = datetime.now()
 
-            self._nodes[addr]['last_seen'] = datetime.now()
+            self._nodes[addr]['online'] = True
             self.add_data(addr, client_config)
-            self._nodes.update(proto, addr)
+            self.update(proto, _addr)
 
             return self._nodes[addr]
 
         except Exception as e:
-            print(self.LOG_TAG + " exception adding/updating node: ", e, addr, client_config)
+            print(self.LOG_TAG, "exception adding/updating node: ", e, "addr:", addr, "config:", client_config)
 
         return None
 
@@ -56,21 +57,37 @@ class Nodes():
             self._nodes[addr]['data'] = self.get_client_config(client_config)
             self.add_rules(addr, client_config.rules)
 
+    def add_rule(self, time, node, name, enabled, precedence, action, duration, op_type, op_sensitive, op_operand, op_data):
+        # don't add rule if the user has selected to exclude temporary
+        # rules
+        if duration in Config.RULES_DURATION_FILTER:
+            return
+
+        self._db.insert("rules",
+                  "(time, node, name, enabled, precedence, action, duration, operator_type, operator_sensitive, operator_operand, operator_data)",
+                  (time, node, name, enabled, precedence, action, duration, op_type, op_sensitive, op_operand, op_data),
+                        action_on_conflict="REPLACE")
+
     def add_rules(self, addr, rules):
         try:
             for _,r in enumerate(rules):
-                self._db.insert("rules",
-                        "(time, node, name, enabled, precedence, action, duration, operator_type, operator_sensitive, operator_operand, operator_data)",
-                            (datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                self.add_rule(datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                                 addr,
                                 r.name, str(r.enabled), str(r.precedence), r.action, r.duration,
                                 r.operator.type,
                                 str(r.operator.sensitive),
                                 r.operator.operand,
-                                r.operator.data),
-                            action_on_conflict="IGNORE")
+                                r.operator.data)
         except Exception as e:
             print(self.LOG_TAG + " exception adding node to db: ", e)
+
+    def update_rule_time(self, time, rule_name, addr):
+        self._db.update("rules",
+                        "time=?",
+                        (time, rule_name, addr),
+                        "name=? AND node=?",
+                        action_on_conflict="OR REPLACE"
+                        )
 
     def delete_all(self):
         self.send_notifications(None)
@@ -170,13 +187,33 @@ class Nodes():
     def send_notification(self, addr, notification, callback_signal=None):
         try:
             notification.id = int(str(time.time()).replace(".", ""))
-            self._nodes[addr]['notifications'].put(notification)
+            if addr not in self._nodes:
+                # FIXME: the reply is sent before we return the notification id
+                if callback_signal != None:
+                    callback_signal.emit(
+                        ui_pb2.NotificationReply(
+                            id=notification.id,
+                            code=ui_pb2.ERROR,
+                            data="node not connected: {0}".format(addr)
+                        )
+                    )
+                return notification.id
+
             self._notifications_sent[notification.id] = {
                     'callback': callback_signal,
                     'type': notification.type
                     }
+            self._nodes[addr]['notifications'].put(notification)
         except Exception as e:
             print(self.LOG_TAG + " exception sending notification: ", e, addr, notification)
+            if callback_signal != None:
+                callback_signal.emit(
+                    ui_pb2.NotificationReply(
+                        id=notification.id,
+                        code=ui_pb2.ERROR,
+                        data="Notification not sent ({0}):<br>{1}".format(addr, e)
+                    )
+                )
 
         return notification.id
 
@@ -202,9 +239,11 @@ class Nodes():
         if reply == None:
             print(self.LOG_TAG, " reply notification None")
             return
+
         if reply.id in self._notifications_sent:
             if self._notifications_sent[reply.id] != None:
-                self._notifications_sent[reply.id]['callback'].emit(reply)
+                if self._notifications_sent[reply.id]['callback'] != None:
+                    self._notifications_sent[reply.id]['callback'].emit(reply)
 
                 # delete only one-time notifications
                 # we need the ID of streaming notifications from the server
@@ -226,3 +265,18 @@ class Nodes():
                     )
         except Exception as e:
             print(self.LOG_TAG + " exception updating DB: ", e, addr)
+
+    def delete_rule(self, rule_name, addr, callback):
+        rule = ui_pb2.Rule(name=rule_name)
+        rule.enabled = False
+        rule.action = ""
+        rule.duration = ""
+        rule.operator.type = ""
+        rule.operator.operand = ""
+        rule.operator.data = ""
+
+        noti = ui_pb2.Notification(type=ui_pb2.DELETE_RULE, rules=[rule])
+        nid = self.send_notification(addr, noti, None)
+        self._db.delete_rule(rule.name, addr)
+
+        return nid, noti

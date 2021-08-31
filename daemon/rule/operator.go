@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/evilsocket/opensnitch/daemon/conman"
 	"github.com/evilsocket/opensnitch/daemon/core"
@@ -29,6 +30,7 @@ const (
 	Complex = Type("complex") // for future use
 	List    = Type("list")
 	Network = Type("network")
+	Lists   = Type("lists")
 )
 
 // Available operands
@@ -46,6 +48,7 @@ const (
 	OpDstNetwork          = Operand("dest.network")
 	OpProto               = Operand("protocol")
 	OpList                = Operand("list")
+	OpDomainsLists        = Operand("lists.domains")
 )
 
 type opCallback func(value interface{}) bool
@@ -58,9 +61,14 @@ type Operator struct {
 	Data      string     `json:"data"`
 	List      []Operator `json:"list"`
 
-	cb      opCallback
-	re      *regexp.Regexp
-	netMask *net.IPNet
+	sync.RWMutex
+	cb                  opCallback
+	re                  *regexp.Regexp
+	netMask             *net.IPNet
+	isCompiled          bool
+	lists               map[string]string
+	listsMonitorRunning bool
+	exitMonitorChan     chan (bool)
 }
 
 // NewOperator returns a new operator object
@@ -72,15 +80,14 @@ func NewOperator(t Type, s Sensitive, o Operand, data string, list []Operator) (
 		Data:      data,
 		List:      list,
 	}
-	if err := op.Compile(); err != nil {
-		log.Error("NewOperator() failed to compile: %s", err)
-		return nil, err
-	}
 	return &op, nil
 }
 
 // Compile translates the operator type field to its callback counterpart
 func (o *Operator) Compile() error {
+	if o.isCompiled {
+		return nil
+	}
 	if o.Type == Simple {
 		o.cb = o.simpleCmp
 	} else if o.Type == Regexp {
@@ -93,6 +100,12 @@ func (o *Operator) Compile() error {
 			return err
 		}
 		o.re = re
+	} else if o.Operand == OpDomainsLists {
+		if o.Data == "" {
+			return fmt.Errorf("Operand lists is empty, nothing to load: %s", o)
+		}
+		o.loadLists()
+		o.cb = o.domainsListCmp
 	} else if o.Type == List {
 		o.Operand = OpList
 	} else if o.Type == Network {
@@ -103,6 +116,8 @@ func (o *Operator) Compile() error {
 		}
 		o.cb = o.cmpNetwork
 	}
+	log.Debug("Operator compiled: %s", o)
+	o.isCompiled = true
 
 	return nil
 }
@@ -142,14 +157,25 @@ func (o *Operator) cmpNetwork(destIP interface{}) bool {
 	return o.netMask.Contains(destIP.(net.IP))
 }
 
+func (o *Operator) domainsListCmp(v interface{}) bool {
+	dstHost := v.(string)
+	if dstHost == "" {
+		return false
+	}
+	o.RLock()
+	defer o.RUnlock()
+
+	if _, found := o.lists[dstHost]; found {
+		log.Debug("%s: %s, %s", log.Red("domain list match"), dstHost, o.lists[dstHost])
+		return true
+	}
+	return false
+}
+
 func (o *Operator) listMatch(con interface{}) bool {
 	res := true
-	for i := 0; i < len(o.List); i += 1 {
-		o := o.List[i]
-		if err := o.Compile(); err != nil {
-			return false
-		}
-		res = res && o.Match(con.(*conman.Connection))
+	for i := 0; i < len(o.List); i++ {
+		res = res && o.List[i].Match(con.(*conman.Connection))
 	}
 	return res
 }
@@ -183,6 +209,8 @@ func (o *Operator) Match(con *conman.Connection) bool {
 		return o.cb(con.DstIP)
 	} else if o.Operand == OpList {
 		return o.listMatch(con)
+	} else if o.Operand == OpDomainsLists {
+		return o.cb(con.DstHost)
 	}
 
 	return false

@@ -23,6 +23,7 @@ func TestRuleLoader(t *testing.T) {
 	var list []Operator
 	dur1s := Duration("1s")
 	dummyOper, _ := NewOperator(Simple, false, OpTrue, "", list)
+	dummyOper.Compile()
 	inMem1sRule := Create("000-xxx-name", true, false, Allow, dur1s, dummyOper)
 	inMemUntilRestartRule := Create("000-aaa-name", true, false, Allow, Restart, dummyOper)
 
@@ -57,6 +58,7 @@ func TestRuleLoader(t *testing.T) {
 	testSortRules(t, l)
 	testFindMatch(t, l)
 	testFindEnabled(t, l)
+	testDurationChange(t, l)
 }
 
 func TestLiveReload(t *testing.T) {
@@ -217,6 +219,23 @@ func testFindEnabled(t *testing.T, l *Loader) {
 		t.Error("FindEnabledMatch, match nil")
 	}
 	if match.Name == "001-deny-chrome" {
-		t.Error("findEnabkedMatch: deny rule shouldn't have matched: ", match)
+		t.Error("findEnabledMatch: deny rule shouldn't have matched: ", match)
+	}
+}
+
+// test that changing the Duration of a temporary rule doesn't delete
+// the new one, ignoring the old timer.
+func testDurationChange(t *testing.T, l *Loader) {
+	l.rules["000-aaa-name"].Duration = "2s"
+	if err := l.replaceUserRule(l.rules["000-aaa-name"]); err != nil {
+		t.Error("testDurationChange, error replacing rule: ", err)
+	}
+	l.rules["000-aaa-name"].Duration = "1h"
+	if err := l.replaceUserRule(l.rules["000-aaa-name"]); err != nil {
+		t.Error("testDurationChange, error replacing rule: ", err)
+	}
+	time.Sleep(time.Second * 4)
+	if _, found := l.rules["000-aaa-name"]; !found {
+		t.Error("testDurationChange, error: rule has been deleted")
 	}
 }

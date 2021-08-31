@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/evilsocket/opensnitch/daemon/conman"
+	"github.com/evilsocket/opensnitch/daemon/firewall/iptables"
 	"github.com/evilsocket/opensnitch/daemon/log"
 	"github.com/evilsocket/opensnitch/daemon/rule"
 	"github.com/evilsocket/opensnitch/daemon/statistics"
@@ -16,14 +17,17 @@ import (
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/connectivity"
+	"google.golang.org/grpc/keepalive"
 )
 
 var (
 	configFile             = "/etc/opensnitchd/default-config.json"
 	dummyOperator, _       = rule.NewOperator(rule.Simple, false, rule.OpTrue, "", make([]rule.Operator, 0))
 	clientDisconnectedRule = rule.Create("ui.client.disconnected", true, false, rule.Allow, rule.Once, dummyOperator)
-	clientErrorRule        = rule.Create("ui.client.error", true, false, rule.Allow, rule.Once, dummyOperator)
-	config                 Config
+	// While the GUI is connected, deny by default everything until the user takes an action.
+	clientConnectedRule = rule.Create("ui.client.connected", true, false, rule.Deny, rule.Once, dummyOperator)
+	clientErrorRule     = rule.Create("ui.client.error", true, false, rule.Allow, rule.Once, dummyOperator)
+	config              Config
 )
 
 type serverConfig struct {
@@ -34,12 +38,14 @@ type serverConfig struct {
 // Config holds the values loaded from configFile
 type Config struct {
 	sync.RWMutex
-	Server            serverConfig `json:"Server"`
-	DefaultAction     string       `json:"DefaultAction"`
-	DefaultDuration   string       `json:"DefaultDuration"`
-	InterceptUnknown  bool         `json:"InterceptUnknown"`
-	ProcMonitorMethod string       `json:"ProcMonitorMethod"`
-	LogLevel          *uint32      `json:"LogLevel"`
+	Server            serverConfig           `json:"Server"`
+	DefaultAction     string                 `json:"DefaultAction"`
+	DefaultDuration   string                 `json:"DefaultDuration"`
+	InterceptUnknown  bool                   `json:"InterceptUnknown"`
+	ProcMonitorMethod string                 `json:"ProcMonitorMethod"`
+	LogLevel          *uint32                `json:"LogLevel"`
+	Firewall          string                 `json:"Firewall"`
+	Stats             statistics.StatsConfig `json:"Stats"`
 }
 
 // Client holds the connection information of a client.
@@ -56,6 +62,8 @@ type Client struct {
 	client              protocol.UIClient
 	configWatcher       *fsnotify.Watcher
 	streamNotifications protocol.UI_NotificationsClient
+	//isAsking is set to true if the client is awaiting a decision from the GUI
+	isAsking bool
 }
 
 // NewClient creates and configures a new client.
@@ -64,6 +72,7 @@ func NewClient(socketPath string, stats *statistics.Statistics, rules *rule.Load
 		stats:        stats,
 		rules:        rules,
 		isUnixSocket: false,
+		isAsking:     false,
 	}
 	c.clientCtx, c.clientCancel = context.WithCancel(context.Background())
 
@@ -99,10 +108,34 @@ func (c *Client) InterceptUnknown() bool {
 	return config.InterceptUnknown
 }
 
+// GetStatsConfig returns the stats config from disk
+func (c *Client) GetStatsConfig() statistics.StatsConfig {
+	config.RLock()
+	defer config.RUnlock()
+	return config.Stats
+}
+
+// GetFirewallType returns the firewall to use
+func (c *Client) GetFirewallType() string {
+	config.RLock()
+	defer config.RUnlock()
+	if config.Firewall == "" {
+		return iptables.Name
+	}
+	return config.Firewall
+}
+
 // DefaultAction returns the default configured action for
 func (c *Client) DefaultAction() rule.Action {
+	isConnected := c.Connected()
+
 	c.RLock()
 	defer c.RUnlock()
+
+	if isConnected {
+		return clientConnectedRule.Action
+	}
+
 	return clientDisconnectedRule.Action
 }
 
@@ -116,12 +149,26 @@ func (c *Client) DefaultDuration() rule.Duration {
 
 // Connected checks if the client has established a connection with the server.
 func (c *Client) Connected() bool {
-	c.Lock()
-	defer c.Unlock()
+	c.RLock()
+	defer c.RUnlock()
 	if c.con == nil || c.con.GetState() != connectivity.Ready {
 		return false
 	}
 	return true
+}
+
+//GetIsAsking returns the isAsking flag
+func (c *Client) GetIsAsking() bool {
+	c.RLock()
+	defer c.RUnlock()
+	return c.isAsking
+}
+
+//SetIsAsking sets the isAsking flag
+func (c *Client) SetIsAsking(flag bool) {
+	c.Lock()
+	defer c.Unlock()
+	c.isAsking = flag
 }
 
 func (c *Client) poller() {
@@ -148,7 +195,7 @@ func (c *Client) poller() {
 			if c.Connected() == true {
 				// if the client is connected and ready, send a ping
 				if err := c.ping(time.Now()); err != nil {
-					log.Warning("Error while pinging UI service: %s", err)
+					log.Warning("Error while pinging UI service: %s, state: %v", err, c.con.GetState())
 				}
 			}
 
@@ -203,7 +250,17 @@ func (c *Client) openSocket() (err error) {
 				return net.DialTimeout("unix", addr, timeout)
 			}))
 	} else {
-		c.con, err = grpc.Dial(c.socketPath, grpc.WithInsecure())
+		// https://pkg.go.dev/google.golang.org/grpc/keepalive#ClientParameters
+		var kacp = keepalive.ClientParameters{
+			Time: 5 * time.Second,
+			// if there's no activity after ^, wait 20s and close
+			// server timeout is 20s by default.
+			Timeout: 22 * time.Second,
+			// send pings even without active streams
+			PermitWithoutStream: true,
+		}
+
+		c.con, err = grpc.Dial(c.socketPath, grpc.WithInsecure(), grpc.WithKeepaliveParams(kacp))
 	}
 
 	return err
@@ -253,13 +310,10 @@ func (c *Client) ping(ts time.Time) (err error) {
 
 // Ask sends a request to the server, with the values of a connection to be
 // allowed or denied.
-func (c *Client) Ask(con *conman.Connection) (*rule.Rule, bool) {
-	if c.Connected() == false {
-		return clientDisconnectedRule, false
+func (c *Client) Ask(con *conman.Connection) *rule.Rule {
+	if c.client == nil {
+		return nil
 	}
-
-	c.Lock()
-	defer c.Unlock()
 
 	// FIXME: if timeout is fired, the rule is not added to the list in the GUI
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*120)
@@ -267,14 +321,14 @@ func (c *Client) Ask(con *conman.Connection) (*rule.Rule, bool) {
 	reply, err := c.client.AskRule(ctx, con.Serialize())
 	if err != nil {
 		log.Warning("Error while asking for rule: %s - %v", err, con)
-		return nil, false
+		return nil
 	}
 
 	r, err := rule.Deserialize(reply)
 	if err != nil {
-		return nil, false
+		return nil
 	}
-	return r, true
+	return r
 }
 
 func (c *Client) monitorConfigWorker() {

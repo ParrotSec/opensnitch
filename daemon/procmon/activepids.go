@@ -15,18 +15,18 @@ type value struct {
 	Process *Process
 	//Starttime uniquely identifies a process, it is the 22nd value in /proc/<PID>/stat
 	//if another process starts with the same PID, it's Starttime will be unique
-	Starttime uint32
+	Starttime uint64
 }
 
 var (
-	activePids     = make(map[uint32]value)
+	activePids     = make(map[uint64]value)
 	activePidsLock = sync.RWMutex{}
 )
 
-//monitorActivePids checks that each process in activePids
+//MonitorActivePids checks that each process in activePids
 //is still running and if not running (or another process with the same pid is running),
 //removes the pid from activePids
-func monitorActivePids() {
+func MonitorActivePids() {
 	for {
 		time.Sleep(time.Second)
 		activePidsLock.Lock()
@@ -35,19 +35,22 @@ func monitorActivePids() {
 			if err != nil {
 				//file does not exists, pid has quit
 				delete(activePids, k)
+				pidsCache.delete(int(k))
 				continue
 			}
-			startTime, err := strconv.Atoi(strings.Split(string(data), " ")[21])
+			startTime, err := strconv.ParseInt(strings.Split(string(data), " ")[21], 10, 64)
 			if err != nil {
-				log.Error("Could not find or convert Starttime. This should never happen. Please report this incident to the Opensnitch developers.")
+				log.Error("Could not find or convert Starttime. This should never happen. Please report this incident to the Opensnitch developers: %v", err)
 				delete(activePids, k)
+				pidsCache.delete(int(k))
 				continue
 			}
-			if uint32(startTime) != v.Starttime {
+			if uint64(startTime) != v.Starttime {
 				//extremely unlikely: the original process has quit and another process
 				//was started with the same PID - all this in less than 1 second
 				log.Error("Same PID but different Starttime. Please report this incident to the Opensnitch developers.")
 				delete(activePids, k)
+				pidsCache.delete(int(k))
 				continue
 			}
 		}
@@ -55,7 +58,7 @@ func monitorActivePids() {
 	}
 }
 
-func findProcessInActivePidsCache(pid uint32) *Process {
+func findProcessInActivePidsCache(pid uint64) *Process {
 	activePidsLock.Lock()
 	defer activePidsLock.Unlock()
 	if value, ok := activePids[pid]; ok {
@@ -64,23 +67,23 @@ func findProcessInActivePidsCache(pid uint32) *Process {
 	return nil
 }
 
-func addToActivePidsCache(pid uint32, proc *Process) {
+func addToActivePidsCache(pid uint64, proc *Process) {
 
 	data, err := ioutil.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
 	if err != nil {
 		//most likely the process has quit by now
 		return
 	}
-	startTime, err2 := strconv.Atoi(strings.Split(string(data), " ")[21])
+	startTime, err2 := strconv.ParseInt(strings.Split(string(data), " ")[21], 10, 64)
 	if err2 != nil {
-		log.Error("Could not find or convert Starttime. This should never happen. Please report this incident to the Opensnitch developers.")
+		log.Error("Could not find or convert Starttime. This should never happen. Please report this incident to the Opensnitch developers: %v", err)
 		return
 	}
 
 	activePidsLock.Lock()
 	activePids[pid] = value{
 		Process:   proc,
-		Starttime: uint32(startTime),
+		Starttime: uint64(startTime),
 	}
 	activePidsLock.Unlock()
 }
