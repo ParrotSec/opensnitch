@@ -20,15 +20,8 @@ Build-Depends:
  golang-goprotobuf-dev,
  pkg-config,
  libnetfilter-queue-dev,
- libmnl-dev,
- python3-setuptools,
- python3-all,
- debhelper (>= 7.4.3),
- dh-python,
- pyqt5-dev-tools,
- qtchooser,
- qttools5-dev-tools
-Standards-Version: 4.5.1
+ libmnl-dev
+Standards-Version: 4.4.0
 Vcs-Browser: https://salsa.debian.org/go-team/packages/opensnitch
 Vcs-Git: https://salsa.debian.org/go-team/packages/opensnitch.git
 Homepage: https://github.com/evilsocket/opensnitch
@@ -54,22 +47,3 @@ Description: GNU/Linux firewall application
  .
  The GUI allows the user to view live outgoing connections, as well as search
  by process, user, host or port.
-
-Package: opensnitch-ui
-Architecture: all
-Section: net
-Depends:
- debconf, libqt5sql5-sqlite, python3:any, python3-setuptools, python3-six, python3-pyqt5,
- python3-pyqt5.qtsql, python3-pyinotify, whiptail | dialog, opensnitch,
- python3-slugify, python3-protobuf, python3-grpc-tools
-Description: opensnitch application firewall GUI
- opensnitch-ui is a GUI for opensnitch written in Python.
- It allows the user to view live outgoing connections, as well as search
- for details of the intercepted connections.
- .
- The user can decide if block outgoing connections based on properties of
- the connection: by port, by uid, by dst ip, by program or a combination
- of them.
- .
- These rules can last forever, until restart the daemon or just one time.
-

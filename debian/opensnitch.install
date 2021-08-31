@@ -1,4 +1,2 @@
-_build/bin/daemon usr/bin/
-debian/tmp/usr/share/gocode usr/share/
 daemon/default-config.json etc/opensnitchd/
 daemon/system-fw.json etc/opensnitchd/
