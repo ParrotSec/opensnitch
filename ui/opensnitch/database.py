@@ -1,6 +1,7 @@
 from PyQt5.QtSql import QSqlDatabase, QSqlQueryModel, QSqlQuery
 import threading
 import sys
+from datetime import datetime, timedelta
 
 class Database:
     db = None
@@ -21,13 +22,9 @@ class Database:
         self.db_file = Database.DB_IN_MEMORY
         self.db_name = dbname
 
-    def initialize(self, dbtype=DB_TYPE_MEMORY, dbfile=DB_IN_MEMORY):
+    def initialize(self, dbtype=DB_TYPE_MEMORY, dbfile=DB_IN_MEMORY, db_name="db"):
         if dbtype != Database.DB_TYPE_MEMORY:
             self.db_file = dbfile
-
-        if self.db != None:
-            QSqlDatabase.removeDatabase(self.db_name)
-            self.close()
 
         self.db = QSqlDatabase.addDatabase("QSQLITE", self.db_name)
         self.db.setDatabaseName(self.db_file)
@@ -45,10 +42,17 @@ class Database:
         return True, None
 
     def close(self):
-        self.db.close()
+        try:
+            if self.db.isOpen():
+                self.db.removeDatabase(self.db_name)
+                self.db.close()
+        except Exception as e:
+            print("db.close() exception:", e)
 
     def is_db_ok(self):
-        q = QSqlQuery("PRAGMA integrity_check;", self.db)
+        # XXX: quick_check may not be fast enough with some DBs on slow
+        # hardware.
+        q = QSqlQuery("PRAGMA quick_check;", self.db)
         if q.exec_() is not True:
             print(q.lastError().driverText())
             return False, q.lastError().driverText()
@@ -80,7 +84,7 @@ class Database:
             q = QSqlQuery("PRAGMA cache_size=10000", self.db)
             q.exec_()
         else:
-            q = QSqlQuery("PRAGMA optimize", self.db)
+            q = QSqlQuery("PRAGMA synchronous = NORMAL", self.db)
             q.exec_()
 
         q = QSqlQuery("create table if not exists connections (" \
@@ -101,6 +105,8 @@ class Database:
                 "rule text, " \
                 "UNIQUE(node, action, protocol, src_ip, src_port, dst_ip, dst_port, uid, pid, process, process_args))",
                 self.db)
+        q = QSqlQuery("create index time_index on connections (time)", self.db)
+        q.exec_()
         q = QSqlQuery("create index action_index on connections (action)", self.db)
         q.exec_()
         q = QSqlQuery("create index protocol_index on connections (protocol)", self.db)
@@ -117,6 +123,8 @@ class Database:
         q.exec_()
         q = QSqlQuery("create index node_index on connections (node)", self.db)
         q.exec_()
+        q = QSqlQuery("CREATE INDEX details_query_index on connections (process, process_args, uid, pid, dst_ip, dst_host, dst_port, action, node, protocol)", self.db)
+        q.exec_()
         q = QSqlQuery("create table if not exists rules (" \
                 "time text, " \
                 "node text, " \
@@ -132,6 +140,9 @@ class Database:
                 "UNIQUE(node, name)"
                 ")", self.db)
         q.exec_()
+        q = QSqlQuery("create index rules_index on rules (time)", self.db)
+        q.exec_()
+
         q = QSqlQuery("create table if not exists hosts (what text primary key, hits integer)", self.db)
         q.exec_()
         q = QSqlQuery("create table if not exists procs (what text primary key, hits integer)", self.db)
@@ -142,6 +153,7 @@ class Database:
         q.exec_()
         q = QSqlQuery("create table if not exists users (what text primary key, hits integer)", self.db)
         q.exec_()
+
         q = QSqlQuery("create table if not exists nodes (" \
                 "addr text primary key," \
                 "hostname text," \
@@ -156,35 +168,20 @@ class Database:
                 , self.db)
         q.exec_()
 
+    def optimize(self):
+        """https://www.sqlite.org/pragma.html#pragma_optimize
+        """
+        q = QSqlQuery("PRAGMA optimize;", self.db)
+        q.exec_()
+
     def clean(self, table):
         with self._lock:
             q = QSqlQuery("delete from " + table, self.db)
             q.exec_()
 
-    def empty_rule(self, name=""):
-        if name == "":
-            return
-        qstr = "DELETE FROM connections WHERE rule = ?"
-
-        with self._lock:
-            q = QSqlQuery(qstr, self.db)
-            q.prepare(qstr)
-            q.addBindValue(name)
-            if not q.exec_():
-                print("db, empty_rule() ERROR: ", qstr)
-                print(q.lastError().driverText())
-
-    def delete_rule(self, name, node):
-        qstr = "DELETE FROM rules WHERE name=? AND node=?"
-
-        with self._lock:
-            q = QSqlQuery(qstr, self.db)
-            q.prepare(qstr)
-            q.addBindValue(name)
-            q.addBindValue(node)
-            if not q.exec_():
-                print("db, delete_rule() ERROR: ", qstr)
-                print(q.lastError().driverText())
+    def vacuum(self):
+        q = QSqlQuery("VACUUM;", self.db)
+        q.exec_()
 
     def clone_db(self, name):
         return QSqlDatabase.cloneDatabase(self.db, name)
@@ -201,6 +198,56 @@ class Database:
 
     def rollback(self):
         self.db.rollback()
+
+    def get_total_records(self):
+        try:
+            q = QSqlQuery("SELECT count(*) FROM connections", self.db)
+            if q.exec_() and q.first():
+                r = q.value(0)
+        except Exception as e:
+            print("db, get_total_records() error:", e)
+
+    def get_newest_record(self):
+        try:
+            q = QSqlQuery("SELECT time FROM connections ORDER BY 1 DESC LIMIT 1", self.db)
+            if q.exec_() and q.first():
+                return q.value(0)
+        except Exception as e:
+            print("db, get_newest_record() error:", e)
+        return 0
+
+    def get_oldest_record(self):
+        try:
+            q = QSqlQuery("SELECT time FROM connections ORDER BY 1 ASC LIMIT 1", self.db)
+            if q.exec_() and q.first():
+                return q.value(0)
+        except Exception as e:
+            print("db, get_oldest_record() error:", e)
+        return 0
+
+    def purge_oldest(self, max_days_to_keep):
+        try:
+            oldt = self.get_oldest_record()
+            newt = self.get_newest_record()
+            if oldt == None or newt == None or oldt == 0 or newt == 0:
+                return -1
+
+            oldest = datetime.fromisoformat(oldt)
+            newest = datetime.fromisoformat(newt)
+            diff = newest - oldest
+            date_to_purge = datetime.now() - timedelta(days=max_days_to_keep)
+
+            if diff.days >= max_days_to_keep:
+                q = QSqlQuery(self.db)
+                q.prepare("DELETE FROM connections WHERE time < ?")
+                q.bindValue(0, str(date_to_purge))
+                if q.exec_():
+                    print("purge_oldest() {0} records deleted".format(q.numRowsAffected()))
+                    return q.numRowsAffected()
+        except Exception as e:
+            print("db, purge_oldest() error:", e)
+
+        return -1
 
     def select(self, qstr):
         try:
@@ -335,3 +382,58 @@ class Database:
 
     def get_query(self, table, fields):
         return "SELECT " + fields + " FROM " + table
+
+    def empty_rule(self, name=""):
+        if name == "":
+            return
+        qstr = "DELETE FROM connections WHERE rule = ?"
+
+        with self._lock:
+            q = QSqlQuery(qstr, self.db)
+            q.prepare(qstr)
+            q.addBindValue(name)
+            if not q.exec_():
+                print("db, empty_rule() ERROR: ", qstr)
+                print(q.lastError().driverText())
+
+    def delete_rule(self, name, node_addr):
+        qstr = "DELETE FROM rules WHERE name=?"
+        if node_addr != None:
+            qstr = qstr + " AND node=?"
+
+        with self._lock:
+            q = QSqlQuery(qstr, self.db)
+            q.prepare(qstr)
+            q.addBindValue(name)
+            if node_addr != None:
+                q.addBindValue(node_addr)
+            if not q.exec_():
+                print("db, delete_rule() ERROR: ", qstr)
+                print(q.lastError().driverText())
+
+    def get_rule(self, rule_name, node_addr=None):
+        """
+        get rule records, given the name of the rule and the node
+        """
+        qstr = "SELECT * from rules WHERE name=?"
+        if node_addr != None:
+            qstr = qstr + " AND node=?"
+
+        q = QSqlQuery(qstr, self.db)
+        q.prepare(qstr)
+        q.addBindValue(rule_name)
+        if node_addr != None:
+            q.addBindValue(node_addr)
+        q.exec_()
+
+        return q
+
+    def insert_rule(self, rule, node_addr):
+        self.insert("rules",
+            "(time, node, name, enabled, precedence, action, duration, operator_type, operator_sensitive, operator_operand, operator_data)",
+                (datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    node_addr, rule.name,
+                    str(rule.enabled), str(rule.precedence),
+                    rule.action, rule.duration, rule.operator.type,
+                    str(rule.operator.sensitive), rule.operator.operand, rule.operator.data),
+                action_on_conflict="IGNORE")

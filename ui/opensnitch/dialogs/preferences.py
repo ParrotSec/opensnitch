@@ -9,7 +9,8 @@ from PyQt5.QtCore import QCoreApplication as QC
 from opensnitch.config import Config
 from opensnitch.nodes import Nodes
 from opensnitch.database import Database
-from opensnitch.utils import Message
+from opensnitch.utils import Message, QuickHelp, Themes
+from opensnitch.notifications import DesktopNotifications
 
 from opensnitch import ui_pb2
 
@@ -18,14 +19,21 @@ class PreferencesDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
 
     LOG_TAG = "[Preferences] "
     _notification_callback = QtCore.pyqtSignal(ui_pb2.NotificationReply)
+    saved = QtCore.pyqtSignal()
 
     TAB_POPUPS = 0
     TAB_UI = 1
     TAB_NODES = 2
     TAB_DB = 3
 
-    def __init__(self, parent=None):
+    SUM = 1
+    REST = 0
+
+    def __init__(self, parent=None, appicon=None):
         QtWidgets.QDialog.__init__(self, parent, QtCore.Qt.WindowStaysOnTopHint)
+
+        self._themes = Themes.instance()
+        self._saved_theme = ""
 
         self._cfg = Config.get()
         self._nodes = Nodes.instance()
@@ -33,8 +41,10 @@ class PreferencesDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
 
         self._notification_callback.connect(self._cb_notification_callback)
         self._notifications_sent = {}
+        self._desktop_notifications = DesktopNotifications()
 
         self.setupUi(self)
+        self.setWindowIcon(appicon)
 
         self.dbFileButton.setVisible(False)
         self.dbLabel.setVisible(False)
@@ -47,7 +57,15 @@ class PreferencesDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
         self.popupsCheck.clicked.connect(self._cb_popups_check_toggled)
         self.dbFileButton.clicked.connect(self._cb_file_db_clicked)
         self.checkUIRules.toggled.connect(self._cb_check_ui_rules_toggled)
-        self.helpButton.setToolTipDuration(10 * 1000)
+        self.cmdTimeoutUp.clicked.connect(lambda: self._cb_cmd_spin_clicked(self.spinUITimeout, self.SUM))
+        self.cmdTimeoutDown.clicked.connect(lambda: self._cb_cmd_spin_clicked(self.spinUITimeout, self.REST))
+        self.cmdDBMaxDaysUp.clicked.connect(lambda: self._cb_cmd_spin_clicked(self.spinDBMaxDays, self.SUM))
+        self.cmdDBMaxDaysDown.clicked.connect(lambda: self._cb_cmd_spin_clicked(self.spinDBMaxDays, self.REST))
+        self.cmdDBPurgesUp.clicked.connect(lambda: self._cb_cmd_spin_clicked(self.spinDBPurgeInterval, self.SUM))
+        self.cmdDBPurgesDown.clicked.connect(lambda: self._cb_cmd_spin_clicked(self.spinDBPurgeInterval, self.REST))
+        self.cmdTestNotifs.clicked.connect(self._cb_test_notifs_clicked)
+        self.radioSysNotifs.clicked.connect(self._cb_radio_system_notifications)
+        self.helpButton.setToolTipDuration(30 * 1000)
 
         if QtGui.QIcon.hasThemeIcon("emblem-default") == False:
             self.applyButton.setIcon(self.style().standardIcon(getattr(QtWidgets.QStyle, "SP_DialogApplyButton")))
@@ -55,10 +73,19 @@ class PreferencesDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
             self.acceptButton.setIcon(self.style().standardIcon(getattr(QtWidgets.QStyle, "SP_DialogSaveButton")))
             self.dbFileButton.setIcon(self.style().standardIcon(getattr(QtWidgets.QStyle, "SP_DirOpenIcon")))
 
+        if QtGui.QIcon.hasThemeIcon("list-add") == False:
+            self.cmdTimeoutUp.setIcon(self.style().standardIcon(getattr(QtWidgets.QStyle, "SP_ArrowUp")))
+            self.cmdTimeoutDown.setIcon(self.style().standardIcon(getattr(QtWidgets.QStyle, "SP_ArrowDown")))
+            self.cmdDBMaxDaysUp.setIcon(self.style().standardIcon(getattr(QtWidgets.QStyle, "SP_ArrowUp")))
+            self.cmdDBMaxDaysDown.setIcon(self.style().standardIcon(getattr(QtWidgets.QStyle, "SP_ArrowDown")))
+            self.cmdDBPurgesUp.setIcon(self.style().standardIcon(getattr(QtWidgets.QStyle, "SP_ArrowUp")))
+            self.cmdDBPurgesDown.setIcon(self.style().standardIcon(getattr(QtWidgets.QStyle, "SP_ArrowDown")))
+
     def showEvent(self, event):
         super(PreferencesDialog, self).showEvent(event)
 
         try:
+            self._settingsSaved = False
             self._reset_status_message()
             self._hide_status_label()
             self.comboNodes.clear()
@@ -86,14 +113,33 @@ class PreferencesDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
         self.checkInterceptUnknown.clicked.connect(self._cb_node_needs_update)
         self.checkApplyToNodes.clicked.connect(self._cb_node_needs_update)
         self.comboDBType.currentIndexChanged.connect(self._cb_db_type_changed)
+        self.checkDBMaxDays.toggled.connect(self._cb_db_max_days_toggled)
 
         # True when any node option changes
         self._node_needs_update = False
 
+    def _load_themes(self):
+        theme_idx, self._saved_theme = self._themes.get_saved_theme()
+
+        self.labelThemeError.setVisible(False)
+        self.labelThemeError.setText("")
+        self.comboUITheme.clear()
+        self.comboUITheme.addItem(QC.translate("preferences", "System"))
+        if self._themes.available():
+            themes = self._themes.list_themes()
+            self.comboUITheme.addItems(themes)
+        else:
+            self._saved_theme = ""
+            self.labelThemeError.setStyleSheet('color: red')
+            self.labelThemeError.setVisible(True)
+            self.labelThemeError.setText(QC.translate("preferences", "Themes not available. Install qt-material: pip3 install qt-material"))
+
+        self.comboUITheme.setCurrentIndex(theme_idx)
+
     def _load_settings(self):
         self._default_action = self._cfg.getInt(self._cfg.DEFAULT_ACTION_KEY)
-        self._default_target = self._cfg.getSettings(self._cfg.DEFAULT_TARGET_KEY)
-        self._default_timeout = self._cfg.getSettings(self._cfg.DEFAULT_TIMEOUT_KEY)
+        self._default_target = self._cfg.getInt(self._cfg.DEFAULT_TARGET_KEY, 0)
+        self._default_timeout = self._cfg.getInt(self._cfg.DEFAULT_TIMEOUT_KEY, 15)
         self._disable_popups = self._cfg.getBool(self._cfg.DEFAULT_DISABLE_POPUPS)
 
         if self._cfg.hasKey(self._cfg.DEFAULT_DURATION_KEY):
@@ -115,8 +161,8 @@ class PreferencesDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
         )
 
         self.comboUIAction.setCurrentIndex(self._default_action)
-        self.comboUITarget.setCurrentIndex(int(self._default_target))
-        self.spinUITimeout.setValue(int(self._default_timeout))
+        self.comboUITarget.setCurrentIndex(self._default_target)
+        self.spinUITimeout.setValue(self._default_timeout)
         self.spinUITimeout.setEnabled(not self._disable_popups)
         self.popupsCheck.setChecked(self._disable_popups)
 
@@ -125,13 +171,28 @@ class PreferencesDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
         self.dstPortCheck.setChecked(self._cfg.getBool(self._cfg.DEFAULT_POPUP_ADVANCED_DSTPORT))
         self.uidCheck.setChecked(self._cfg.getBool(self._cfg.DEFAULT_POPUP_ADVANCED_UID))
 
+        # by default, if no configuration exists, enable notifications.
+        self.groupNotifs.setChecked(self._cfg.getBool(Config.NOTIFICATIONS_ENABLED, True))
+        self.radioSysNotifs.setChecked(
+            True if self._cfg.getInt(Config.NOTIFICATIONS_TYPE) == Config.NOTIFICATION_TYPE_SYSTEM and self._desktop_notifications.is_available() == True else False
+        )
+        self.radioQtNotifs.setChecked(
+            True if self._cfg.getInt(Config.NOTIFICATIONS_TYPE) == Config.NOTIFICATION_TYPE_QT or self._desktop_notifications.is_available() == False else False
+        )
+
         self.dbType = self._cfg.getInt(self._cfg.DEFAULT_DB_TYPE_KEY)
         self.comboDBType.setCurrentIndex(self.dbType)
         if self.comboDBType.currentIndex() != Database.DB_TYPE_MEMORY:
             self.dbFileButton.setVisible(True)
             self.dbLabel.setVisible(True)
             self.dbLabel.setText(self._cfg.getSettings(self._cfg.DEFAULT_DB_FILE_KEY))
+        dbMaxDays = self._cfg.getInt(self._cfg.DEFAULT_DB_MAX_DAYS, 1)
+        dbPurgeInterval = self._cfg.getInt(self._cfg.DEFAULT_DB_PURGE_INTERVAL, 5)
+        self._enable_db_cleaner_options(self._cfg.getBool(Config.DEFAULT_DB_PURGE_OLDEST), dbMaxDays)
+        self.spinDBMaxDays.setValue(dbMaxDays)
+        self.spinDBPurgeInterval.setValue(dbPurgeInterval)
 
+        self._load_themes()
         self._load_node_settings()
         self._load_ui_columns_config()
 
@@ -261,10 +322,15 @@ class PreferencesDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
 
             self._node_needs_update = False
 
+        self.saved.emit()
+        self._settingsSaved = True
 
     def _save_db_config(self):
         dbtype = self.comboDBType.currentIndex()
         self._cfg.setSettings(Config.DEFAULT_DB_TYPE_KEY, dbtype)
+        self._cfg.setSettings(Config.DEFAULT_DB_PURGE_OLDEST, bool(self.checkDBMaxDays.isChecked()))
+        self._cfg.setSettings(Config.DEFAULT_DB_MAX_DAYS, int(self.spinDBMaxDays.value()))
+        self._cfg.setSettings(Config.DEFAULT_DB_PURGE_INTERVAL, int(self.spinDBPurgeInterval.value()))
 
         if self.comboDBType.currentIndex() == self.dbType:
             return
@@ -311,6 +377,18 @@ class PreferencesDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
         self._cfg.setSettings(self._cfg.DEFAULT_POPUP_ADVANCED_DSTIP, bool(self.dstIPCheck.isChecked()))
         self._cfg.setSettings(self._cfg.DEFAULT_POPUP_ADVANCED_DSTPORT, bool(self.dstPortCheck.isChecked()))
         self._cfg.setSettings(self._cfg.DEFAULT_POPUP_ADVANCED_UID, bool(self.uidCheck.isChecked()))
+
+        self._cfg.setSettings(self._cfg.NOTIFICATIONS_ENABLED, bool(self.groupNotifs.isChecked()))
+        self._cfg.setSettings(self._cfg.NOTIFICATIONS_TYPE,
+                              int(Config.NOTIFICATION_TYPE_SYSTEM if self.radioSysNotifs.isChecked() else Config.NOTIFICATION_TYPE_QT))
+
+        self._themes.save_theme(self.comboUITheme.currentIndex(), self.comboUITheme.currentText())
+        if self._themes.available() and self._saved_theme != self.comboUITheme.currentText():
+            Message.ok(
+                QC.translate("preferences", "UI theme changed"),
+                QC.translate("preferences", "Restart the GUI in order to apply the new theme"),
+                QtWidgets.QMessageBox.Warning)
+
         # this is a workaround for not display pop-ups.
         # see #79 for more information.
         if self.popupsCheck.isChecked():
@@ -363,19 +441,33 @@ class PreferencesDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
         self.statusLabel.show()
 
     def _set_status_error(self, msg):
+        self._show_status_label()
         self.statusLabel.setStyleSheet('color: red')
         self.statusLabel.setText(msg)
 
     def _set_status_successful(self, msg):
+        self._show_status_label()
         self.statusLabel.setStyleSheet('color: green')
         self.statusLabel.setText(msg)
 
     def _set_status_message(self, msg):
+        self._show_status_label()
         self.statusLabel.setStyleSheet('color: darkorange')
         self.statusLabel.setText(msg)
 
     def _reset_status_message(self):
         self.statusLabel.setText("")
+        self._hide_status_label()
+
+    def _enable_db_cleaner_options(self, enable, db_max_days):
+        self.checkDBMaxDays.setChecked(enable)
+        self.spinDBMaxDays.setEnabled(enable)
+        self.spinDBPurgeInterval.setEnabled(enable)
+        self.labelDBPurgeInterval.setEnabled(enable)
+        self.cmdDBMaxDaysUp.setEnabled(enable)
+        self.cmdDBMaxDaysDown.setEnabled(enable)
+        self.cmdDBPurgesUp.setEnabled(enable)
+        self.cmdDBPurgesDown.setEnabled(enable)
 
     @QtCore.pyqtSlot(ui_pb2.NotificationReply)
     def _cb_notification_callback(self, reply):
@@ -403,8 +495,9 @@ class PreferencesDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
             self.dbLabel.setVisible(True)
 
     def _cb_accept_button_clicked(self):
-        self._save_settings()
         self.accept()
+        if not self._settingsSaved:
+            self._save_settings()
 
     def _cb_apply_button_clicked(self):
         self._save_settings()
@@ -413,9 +506,11 @@ class PreferencesDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
         self.reject()
 
     def _cb_help_button_clicked(self):
-        QtWidgets.QToolTip.showText(QtGui.QCursor.pos(),
-                                    QC.translate("preferences",
-                                                 "Hover the mouse over the texts to display the help<br><br>Don't forget to visit the wiki: <a href=\"{0}\">{0}</a>").format(Config.HELP_URL))
+        QuickHelp.show(
+            QC.translate("preferences",
+                         "Hover the mouse over the texts to display the help<br><br>Don't forget to visit the wiki: <a href=\"{0}\">{0}</a>"
+                         ).format(Config.HELP_URL)
+        )
 
     def _cb_popups_check_toggled(self, checked):
         self.spinUITimeout.setEnabled(not checked)
@@ -430,3 +525,29 @@ class PreferencesDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
 
     def _cb_check_ui_rules_toggled(self, state):
         self.comboUIRules.setEnabled(state)
+
+    def _cb_db_max_days_toggled(self, state):
+        self._enable_db_cleaner_options(state, 1)
+
+    def _cb_cmd_spin_clicked(self, spinWidget, operation):
+        if operation == self.SUM:
+            spinWidget.setValue(spinWidget.value() + 1)
+        else:
+            spinWidget.setValue(spinWidget.value() - 1)
+
+    def _cb_radio_system_notifications(self):
+        if self._desktop_notifications.is_available() == False:
+            self.radioSysNotifs.setChecked(False)
+            self.radioQtNotifs.setChecked(True)
+            self._set_status_error(QC.translate("notifications", "System notifications are not available, you need to install python3-notify2."))
+            return
+
+    def _cb_test_notifs_clicked(self):
+        if self._desktop_notifications.is_available() == False:
+            self._set_status_error(QC.translate("notifications", "System notifications are not available, you need to install python3-notify2."))
+            return
+
+        if self.radioSysNotifs.isChecked():
+            self._desktop_notifications.show("title", "body")
+        else:
+            pass

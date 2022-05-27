@@ -33,6 +33,7 @@ class PromptDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
     FIELD_REGEX_IP      = "regex_ip"
     FIELD_PROC_PATH     = "process_path"
     FIELD_PROC_ARGS     = "process_args"
+    FIELD_PROC_ID       = "process_id"
     FIELD_USER_ID       = "user_id"
     FIELD_DST_IP        = "dst_ip"
     FIELD_DST_PORT      = "dst_port"
@@ -52,14 +53,15 @@ class PromptDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
     # label displayed in the pop-up combo
     DURATION_forever = QC.translate("popups", "forever")
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, appicon=None):
         QtWidgets.QDialog.__init__(self, parent, QtCore.Qt.WindowStaysOnTopHint)
         # Other interesting flags: QtCore.Qt.Tool | QtCore.Qt.BypassWindowManagerHint
         self._cfg = Config.get()
         self.setupUi(self)
+        self.setWindowIcon(appicon)
 
-        self._width = self.width()
-        self._height = self.height()
+        self._width = None
+        self._height = None
 
         dialog_geometry = self._cfg.getSettings("promptDialog/geometry")
         if dialog_geometry == QtCore.QByteArray:
@@ -99,6 +101,14 @@ class PromptDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
         self._ischeckAdvanceded = False
         self.checkAdvanced.toggled.connect(self._check_advanced_toggled)
 
+        self.checkAdvanced.clicked.connect(self._button_clicked)
+        self.durationCombo.activated.connect(self._button_clicked)
+        self.whatCombo.activated.connect(self._button_clicked)
+        self.whatIPCombo.activated.connect(self._button_clicked)
+        self.checkDstIP.clicked.connect(self._button_clicked)
+        self.checkDstPort.clicked.connect(self._button_clicked)
+        self.checkUserID.clicked.connect(self._button_clicked)
+
         if QtGui.QIcon.hasThemeIcon("emblem-default") == False:
             self.applyButton.setIcon(self.style().standardIcon(getattr(QtWidgets.QStyle, "SP_DialogApplyButton")))
             self.denyButton.setIcon(self.style().standardIcon(getattr(QtWidgets.QStyle, "SP_DialogCancelButton")))
@@ -106,6 +116,12 @@ class PromptDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
     def showEvent(self, event):
         super(PromptDialog, self).showEvent(event)
         self.activateWindow()
+
+        if self._width is None or self._height is None:
+            self._width = self.width()
+            self._height = self.height()
+
+        self.setMinimumSize(self._width, self._height)
         self.setMaximumSize(self._width, self._height)
         self.move_popup()
 
@@ -121,17 +137,21 @@ class PromptDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
         elif popup_pos == self._cfg.POPUP_BOTTOM_LEFT:
             self.move(point.bottomLeft())
 
-    def _check_advanced_toggled(self, state):
+    def _stop_countdown(self):
         self.applyButton.setText("%s" % self._apply_text)
         self.denyButton.setText("%s" % self._deny_text)
-        self._tick_thread.stop = state
+        self._tick_thread.stop = True
 
+    def _check_advanced_toggled(self, state):
         self.checkDstIP.setVisible(state)
         self.whatIPCombo.setVisible(state)
         self.destIPLabel.setVisible(not state)
         self.checkDstPort.setVisible(state)
         self.checkUserID.setVisible(state)
         self._ischeckAdvanceded = state
+
+    def _button_clicked(self):
+        self._stop_countdown()
 
     def _set_elide_text(self, widget, text, max_size=132):
         if len(text) > max_size:
@@ -295,17 +315,23 @@ class PromptDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
 
         self.whatCombo.clear()
         self.whatIPCombo.clear()
-        if int(con.process_id) > 0:
-            self.whatCombo.addItem(QC.translate("popups", "from this executable"), self.FIELD_PROC_PATH)
+
+        # the order of these combobox entries must match those in the preferences dialog
+        # prefs -> UI -> Default target
+        self.whatCombo.addItem(QC.translate("popups", "from this executable"), self.FIELD_PROC_PATH)
+        if int(con.process_id) < 0:
+            self.whatCombo.model().item(0).setEnabled(False)
 
         self.whatCombo.addItem(QC.translate("popups", "from this command line"), self.FIELD_PROC_ARGS)
 
-        # the order of the entries must match those in the preferences dialog
-        # prefs -> UI -> Default target
         self.whatCombo.addItem(QC.translate("popups", "to port {0}").format(con.dst_port), self.FIELD_DST_PORT)
         self.whatCombo.addItem(QC.translate("popups", "to {0}").format(con.dst_ip), self.FIELD_DST_IP)
-        if int(con.user_id) >= 0:
-            self.whatCombo.addItem(QC.translate("popups", "from user {0}").format(uid), self.FIELD_USER_ID)
+
+        self.whatCombo.addItem(QC.translate("popups", "from user {0}").format(uid), self.FIELD_USER_ID)
+        if int(con.user_id) < 0:
+            self.whatCombo.model().item(4).setEnabled(False)
+
+        self.whatCombo.addItem(QC.translate("popups", "from this PID"), self.FIELD_PROC_ID)
 
         self._add_dst_networks_to_combo(self.whatCombo, con.dst_ip)
 
@@ -373,9 +399,6 @@ class PromptDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
             self.whatCombo.addItem(QC.translate("popups", "to *.{0}").format('.'.join(parts[i:])), self.FIELD_REGEX_HOST)
             self.whatIPCombo.addItem(QC.translate("popups", "to *.{0}").format('.'.join(parts[i:])), self.FIELD_REGEX_HOST)
 
-        if nparts == 1:
-            self.whatCombo.addItem(QC.translate("popups", "to *{0}").format(dst_host), self.FIELD_REGEX_HOST)
-            self.whatIPCombo.addItem(QC.translate("popups", "to *{0}").format(dst_host), self.FIELD_REGEX_HOST)
 
     def _get_app_icon(self, app_icon):
         """we try to get the icon of an app from the system.
@@ -450,9 +473,12 @@ class PromptDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
 
         elif combo.itemData(what_idx) == self.FIELD_PROC_ARGS:
             # this should not happen
-            if len(self._con.process_args) == 0:
-                return Config.RULE_TYPE_SIMPLE, "process.command", self._con.process_path
+            if len(self._con.process_args) == 0 or self._con.process_args[0] == "":
+                return Config.RULE_TYPE_SIMPLE, "process.path", self._con.process_path
             return Config.RULE_TYPE_SIMPLE, "process.command", ' '.join(self._con.process_args)
+
+        elif combo.itemData(what_idx) == self.FIELD_PROC_ID:
+            return Config.RULE_TYPE_SIMPLE, "process.id", "{0}".format(self._con.process_id)
 
         elif combo.itemData(what_idx) == self.FIELD_USER_ID:
             return Config.RULE_TYPE_SIMPLE, "user.id", "%s" % self._con.user_id
@@ -476,7 +502,10 @@ class PromptDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
         elif combo.itemData(what_idx) == self.FIELD_REGEX_HOST:
             parts = combo.currentText().split(' ')
             text = parts[len(parts)-1]
-            return Config.RULE_TYPE_REGEXP, "dest.host", "%s" % '\.'.join(text.split('.')).replace("*", ".*")
+            # ^(|.*\.)yahoo\.com
+            dsthost = '\.'.join(text.split('.')).replace("*", "")
+            dsthost = "^(|.*\.)%s" % dsthost[2:]
+            return Config.RULE_TYPE_REGEXP, "dest.host", dsthost
 
         elif combo.itemData(what_idx) == self.FIELD_REGEX_IP:
             parts = combo.currentText().split(' ')
@@ -505,51 +534,55 @@ class PromptDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
         return rule_temp_name[:128]
 
     def _send_rule(self):
-        self._cfg.setSettings("promptDialog/geometry", self.saveGeometry())
-        self._rule = ui_pb2.Rule(name="user.choice")
-        self._rule.enabled = True
-        self._rule.action = Config.ACTION_DENY if self._default_action == self.ACTION_IDX_DENY else Config.ACTION_ALLOW
-        self._rule.duration = self._get_duration(self.durationCombo.currentIndex())
+        try:
+            self._cfg.setSettings("promptDialog/geometry", self.saveGeometry())
+            self._rule = ui_pb2.Rule(name="user.choice")
+            self._rule.enabled = True
+            self._rule.action = Config.ACTION_DENY if self._default_action == self.ACTION_IDX_DENY else Config.ACTION_ALLOW
+            self._rule.duration = self._get_duration(self.durationCombo.currentIndex())
 
-        what_idx = self.whatCombo.currentIndex()
-        self._rule.operator.type, self._rule.operator.operand, self._rule.operator.data = self._get_combo_operator(self.whatCombo, what_idx)
-        if self._rule.operator.data == "":
-            print("Invalid rule, discarding: ", self._rule)
-            self._rule = None
+            what_idx = self.whatCombo.currentIndex()
+            self._rule.operator.type, self._rule.operator.operand, self._rule.operator.data = self._get_combo_operator(self.whatCombo, what_idx)
+            if self._rule.operator.data == "":
+                print("Invalid rule, discarding: ", self._rule)
+                self._rule = None
+                return
+
+            rule_temp_name = self._get_rule_name(self._rule)
+            self._rule.name = rule_temp_name
+
+            # TODO: move to a method
+            data=[]
+            if self.checkDstIP.isChecked() and self.whatCombo.itemData(what_idx) != self.FIELD_DST_IP:
+                _type, _operand, _data = self._get_combo_operator(self.whatIPCombo, self.whatIPCombo.currentIndex())
+                data.append({"type": _type, "operand": _operand, "data": _data})
+                rule_temp_name = slugify("%s %s" % (rule_temp_name, _data))
+
+            if self.checkDstPort.isChecked() and self.whatCombo.itemData(what_idx) != self.FIELD_DST_PORT:
+                data.append({"type": Config.RULE_TYPE_SIMPLE, "operand": "dest.port", "data": str(self._con.dst_port)})
+                rule_temp_name = slugify("%s %s" % (rule_temp_name, str(self._con.dst_port)))
+
+            if self.checkUserID.isChecked() and self.whatCombo.itemData(what_idx) != self.FIELD_USER_ID:
+                data.append({"type": Config.RULE_TYPE_SIMPLE, "operand": "user.id", "data": str(self._con.user_id)})
+                rule_temp_name = slugify("%s %s" % (rule_temp_name, str(self._con.user_id)))
+
+            if self._is_list_rule():
+                data.append({"type": self._rule.operator.type, "operand": self._rule.operator.operand, "data": self._rule.operator.data})
+                self._rule.operator.data = json.dumps(data)
+                self._rule.operator.type = Config.RULE_TYPE_LIST
+                self._rule.operator.operand = Config.RULE_TYPE_LIST
+
+            self._rule.name = rule_temp_name
+
+            self.hide()
+            if self._ischeckAdvanceded:
+                self.checkAdvanced.toggle()
+            self._ischeckAdvanceded = False
+
+        except Exception as e:
+            print("[pop-up] exception creating a rule:", e)
+        finally:
+            # signal that the user took a decision and
+            # a new rule is available
             self._done.set()
-            return
-
-        rule_temp_name = self._get_rule_name(self._rule)
-        self._rule.name = rule_temp_name
-
-        # TODO: move to a method
-        data=[]
-        if self.checkDstIP.isChecked() and self.whatCombo.itemData(what_idx) != self.FIELD_DST_IP:
-            _type, _operand, _data = self._get_combo_operator(self.whatIPCombo, self.whatIPCombo.currentIndex())
-            data.append({"type": _type, "operand": _operand, "data": _data})
-            rule_temp_name = slugify("%s %s" % (rule_temp_name, _data))
-
-        if self.checkDstPort.isChecked() and self.whatCombo.itemData(what_idx) != self.FIELD_DST_PORT:
-            data.append({"type": Config.RULE_TYPE_SIMPLE, "operand": "dest.port", "data": str(self._con.dst_port)})
-            rule_temp_name = slugify("%s %s" % (rule_temp_name, str(self._con.dst_port)))
-
-        if self.checkUserID.isChecked() and self.whatCombo.itemData(what_idx) != self.FIELD_USER_ID:
-            data.append({"type": Config.RULE_TYPE_SIMPLE, "operand": "user.id", "data": str(self._con.user_id)})
-            rule_temp_name = slugify("%s %s" % (rule_temp_name, str(self._con.user_id)))
-
-        if self._is_list_rule():
-            data.append({"type": self._rule.operator.type, "operand": self._rule.operator.operand, "data": self._rule.operator.data})
-            self._rule.operator.data = json.dumps(data)
-            self._rule.operator.type = Config.RULE_TYPE_LIST
-            self._rule.operator.operand = Config.RULE_TYPE_LIST
-
-        self._rule.name = rule_temp_name
-
-        self.hide()
-        if self._ischeckAdvanceded:
-            self.checkAdvanced.toggle()
-        self._ischeckAdvanceded = False
-
-        # signal that the user took a decision and
-        # a new rule is available
-        self._done.set()
+            self.hide()

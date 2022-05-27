@@ -28,9 +28,9 @@ class Nodes():
     def count(self):
         return len(self._nodes)
 
-    def add(self, context, client_config=None):
+    def add(self, peer, client_config=None):
         try:
-            proto, _addr = self.get_addr(context.peer())
+            proto, _addr = self.get_addr(peer)
             addr = "%s:%s" % (proto, _addr)
             if addr not in self._nodes:
                 self._nodes[addr] = {
@@ -266,6 +266,23 @@ class Nodes():
         except Exception as e:
             print(self.LOG_TAG + " exception updating DB: ", e, addr)
 
+    def update_all(self, status=OFFLINE):
+        try:
+            for peer in self._nodes:
+                proto, addr = self.get_addr(peer)
+                self._db.update("nodes",
+                        "hostname=?,version=?,last_connection=?,status=?",
+                        (
+                            self._nodes[proto+":"+addr]['data'].name,
+                            self._nodes[proto+":"+addr]['data'].version,
+                            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            status,
+                            addr),
+                            "addr=?"
+                        )
+        except Exception as e:
+            print(self.LOG_TAG + " exception updating nodes: ", e)
+
     def delete_rule(self, rule_name, addr, callback):
         rule = ui_pb2.Rule(name=rule_name)
         rule.enabled = False
@@ -276,7 +293,10 @@ class Nodes():
         rule.operator.data = ""
 
         noti = ui_pb2.Notification(type=ui_pb2.DELETE_RULE, rules=[rule])
-        nid = self.send_notification(addr, noti, None)
+        if addr != None:
+            nid = self.send_notification(addr, noti, None)
+        else:
+            nid = self.send_notifications(noti, None)
         self._db.delete_rule(rule.name, addr)
 
         return nid, noti

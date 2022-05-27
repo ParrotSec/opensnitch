@@ -8,6 +8,14 @@ var (
 	cacheMonitorsRunning = false
 )
 
+// monitor method supported types
+const (
+	MethodFtrace = "ftrace"
+	MethodProc   = "proc"
+	MethodAudit  = "audit"
+	MethodEbpf   = "ebpf"
+)
+
 // man 5 proc; man procfs
 type procIOstats struct {
 	RChar        int64
@@ -38,6 +46,7 @@ type procStatm struct {
 // Process holds the details of a process.
 type Process struct {
 	ID          int
+	Comm        string
 	Path        string
 	Args        []string
 	Env         map[string]string
@@ -69,6 +78,15 @@ func SetMonitorMethod(newMonitorMethod string) {
 	monitorMethod = newMonitorMethod
 }
 
+// GetMonitorMethod configures a new method for parsing connections.
+func GetMonitorMethod() string {
+	lock.Lock()
+	defer lock.Unlock()
+
+	return monitorMethod
+}
+
+// MethodIsEbpf returns if the process monitor method is eBPF.
 func MethodIsEbpf() bool {
 	lock.RLock()
 	defer lock.RUnlock()
@@ -76,6 +94,7 @@ func MethodIsEbpf() bool {
 	return monitorMethod == MethodEbpf
 }
 
+// MethodIsFtrace returns if the process monitor method is eBPF.
 func MethodIsFtrace() bool {
 	lock.RLock()
 	defer lock.RUnlock()
@@ -83,6 +102,7 @@ func MethodIsFtrace() bool {
 	return monitorMethod == MethodFtrace
 }
 
+// MethodIsAudit returns if the process monitor method is eBPF.
 func MethodIsAudit() bool {
 	lock.RLock()
 	defer lock.RUnlock()

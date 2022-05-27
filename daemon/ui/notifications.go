@@ -92,21 +92,9 @@ func (c *Client) handleActionChangeConfig(stream protocol.UI_NotificationsClient
 		return
 	}
 
-	// check if the current monitor method is different from the one received.
-	// in such case close the current method, and start the new one.
-	procMonitorEqual := c.isProcMonitorEqual(newConf.ProcMonitorMethod)
-	oldMethod := c.ProcMonitorMethod()
-	if procMonitorEqual == false {
-		monitor.End()
-		procmon.SetMonitorMethod(newConf.ProcMonitorMethod)
-		// if the new monitor method fails to start, rollback the change and exit
-		// without saving the configuration. Otherwise we can end up with the wrong
-		// monitor method configured and saved to file.
-		if err = monitor.Init(); err != nil {
-			procmon.SetMonitorMethod(oldMethod)
-			c.sendNotificationReply(stream, notification.Id, "", err)
-			return
-		}
+	if err := monitor.ReconfigureMonitorMethod(newConf.ProcMonitorMethod); err != nil {
+		c.sendNotificationReply(stream, notification.Id, "", err)
+		return
 	}
 
 	// this save operation triggers a re-loadConfiguration()
@@ -250,12 +238,21 @@ func (c *Client) sendNotificationReply(stream protocol.UI_NotificationsClient, n
 // receiving notifications.
 // It firstly sends the daemon status and configuration.
 func (c *Client) Subscribe() {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
 
-	if _, err := c.client.Subscribe(ctx, c.getClientConfig()); err != nil {
+	clientCfg, err := c.client.Subscribe(ctx, c.getClientConfig())
+	if err != nil {
 		log.Error("Subscribing to GUI %s", err)
+		// When connecting to the GUI via TCP, sometimes the notifications channel is
+		// not established, and the main channel is never closed.
+		// We need to disconnect everything after a timeout and try it again.
+		c.disconnect()
 		return
+	}
+
+	if tempConf, err := c.parseConf(clientCfg.Config); err == nil {
+		clientConnectedRule.Action = rule.Action(tempConf.DefaultAction)
 	}
 	c.listenForNotifications()
 }
@@ -301,7 +298,5 @@ func (c *Client) listenForNotifications() {
 Exit:
 	notisStream.CloseSend()
 	log.Info("Stop receiving notifications")
-	if c.Connected() {
-		c.disconnect()
-	}
+	c.disconnect()
 }

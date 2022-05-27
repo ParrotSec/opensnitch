@@ -25,6 +25,7 @@ class Config:
     # don't translate
     ACTION_ALLOW = "allow"
     ACTION_DENY = "deny"
+    ACTION_REJECT = "reject"
     DURATION_UNTIL_RESTART = "until restart"
     DURATION_ALWAYS = "always"
     DURATION_ONCE = "once"
@@ -40,6 +41,7 @@ class Config:
     POPUP_TOP_LEFT = 3
     POPUP_BOTTOM_LEFT = 4
 
+    DEFAULT_THEME = "global/theme"
     DEFAULT_DISABLE_POPUPS = "global/disable_popups"
     DEFAULT_TIMEOUT_KEY  = "global/default_timeout"
     DEFAULT_ACTION_KEY   = "global/default_action"
@@ -55,7 +57,14 @@ class Config:
     DEFAULT_SERVER_ADDR  = "global/server_address"
     DEFAULT_DB_TYPE_KEY  = "database/type"
     DEFAULT_DB_FILE_KEY  = "database/file"
+    DEFAULT_DB_PURGE_OLDEST  = "database/purge_oldest"
+    DEFAULT_DB_MAX_DAYS  = "database/max_days"
+    DEFAULT_DB_PURGE_INTERVAL  = "database/purge_interval"
 
+    NOTIFICATIONS_ENABLED = "notifications/enabled"
+    NOTIFICATIONS_TYPE = "notifications/type"
+    NOTIFICATION_TYPE_SYSTEM = 0
+    NOTIFICATION_TYPE_QT = 1
 
     STATS_GEOMETRY = "statsDialog/geometry"
     STATS_LAST_TAB = "statsDialog/last_tab"
@@ -119,14 +128,14 @@ class Config:
     def getSettings(self, path):
         return self.settings.value(path)
 
-    def getBool(self, path):
-        return self.settings.value(path, False, type=bool)
+    def getBool(self, path, default_value=False):
+        return self.settings.value(path, type=bool, defaultValue=default_value)
 
-    def getInt(self, path):
+    def getInt(self, path, default_value=0):
         try:
-            return self.settings.value(path, False, type=int)
+            return self.settings.value(path, type=int, defaultValue=default_value)
         except Exception:
-            return 0
+            return default_value
 
     def getDefaultAction(self):
         _default_action = self.getInt(self.DEFAULT_ACTION_KEY)
