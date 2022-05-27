@@ -28,9 +28,13 @@ class RulesEditorDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
     LAN_RANGES = "^(" + others_net + "|" + classC_net + "|" + classB_net + "|" + classA_net + "|::1|f[cde].*::.*)$"
     LAN_LABEL = "LAN"
 
+    ADD_RULE = 0
+    EDIT_RULE = 1
+    WORK_MODE = ADD_RULE
+
     _notification_callback = QtCore.pyqtSignal(ui_pb2.NotificationReply)
 
-    def __init__(self, parent=None, _rule=None):
+    def __init__(self, parent=None, _rule=None, appicon=None):
         super(RulesEditorDialog, self).__init__(parent)
         QtWidgets.QDialog.__init__(self, parent, QtCore.Qt.WindowStaysOnTopHint)
 
@@ -41,20 +45,28 @@ class RulesEditorDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
         self._old_rule_name = None
 
         self.setupUi(self)
+        self.setWindowIcon(appicon)
 
         self.buttonBox.button(QtWidgets.QDialogButtonBox.Reset).clicked.connect(self._cb_reset_clicked)
         self.buttonBox.button(QtWidgets.QDialogButtonBox.Close).clicked.connect(self._cb_close_clicked)
         self.buttonBox.button(QtWidgets.QDialogButtonBox.Apply).clicked.connect(self._cb_apply_clicked)
         self.buttonBox.button(QtWidgets.QDialogButtonBox.Help).clicked.connect(self._cb_help_clicked)
         self.selectListButton.clicked.connect(self._cb_select_list_button_clicked)
+        self.selectListRegexpButton.clicked.connect(self._cb_select_regexp_list_button_clicked)
+        self.selectIPsListButton.clicked.connect(self._cb_select_ips_list_button_clicked)
+        self.selectNetsListButton.clicked.connect(self._cb_select_nets_list_button_clicked)
         self.protoCheck.toggled.connect(self._cb_proto_check_toggled)
         self.procCheck.toggled.connect(self._cb_proc_check_toggled)
         self.cmdlineCheck.toggled.connect(self._cb_cmdline_check_toggled)
         self.dstPortCheck.toggled.connect(self._cb_dstport_check_toggled)
         self.uidCheck.toggled.connect(self._cb_uid_check_toggled)
+        self.pidCheck.toggled.connect(self._cb_pid_check_toggled)
         self.dstIPCheck.toggled.connect(self._cb_dstip_check_toggled)
         self.dstHostCheck.toggled.connect(self._cb_dsthost_check_toggled)
         self.dstListsCheck.toggled.connect(self._cb_dstlists_check_toggled)
+        self.dstListRegexpCheck.toggled.connect(self._cb_dstregexplists_check_toggled)
+        self.dstListIPsCheck.toggled.connect(self._cb_dstiplists_check_toggled)
+        self.dstListNetsCheck.toggled.connect(self._cb_dstnetlists_check_toggled)
 
         if QtGui.QIcon.hasThemeIcon("emblem-default") == False:
             self.actionAllowRadio.setIcon(self.style().standardIcon(getattr(QtWidgets.QStyle, "SP_DialogApplyButton")))
@@ -83,6 +95,21 @@ class RulesEditorDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
         if dirName != None and dirName != "":
             self.dstListsLine.setText(dirName)
 
+    def _cb_select_nets_list_button_clicked(self):
+        dirName = FileDialog.select_dir(self, self.dstListNetsLine.text())
+        if dirName != None and dirName != "":
+            self.dstListNetsLine.setText(dirName)
+
+    def _cb_select_ips_list_button_clicked(self):
+        dirName = FileDialog.select_dir(self, self.dstListIPsLine.text())
+        if dirName != None and dirName != "":
+            self.dstListIPsLine.setText(dirName)
+
+    def _cb_select_regexp_list_button_clicked(self):
+        dirName = FileDialog.select_dir(self, self.dstRegexpListsLine.text())
+        if dirName != None and dirName != "":
+            self.dstRegexpListsLine.setText(dirName)
+
     def _cb_proto_check_toggled(self, state):
         self.protoCombo.setEnabled(state)
 
@@ -98,6 +125,9 @@ class RulesEditorDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
     def _cb_uid_check_toggled(self, state):
         self.uidLine.setEnabled(state)
 
+    def _cb_pid_check_toggled(self, state):
+        self.pidLine.setEnabled(state)
+
     def _cb_dstip_check_toggled(self, state):
         self.dstIPCombo.setEnabled(state)
 
@@ -108,6 +138,18 @@ class RulesEditorDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
         self.dstListsLine.setEnabled(state)
         self.selectListButton.setEnabled(state)
 
+    def _cb_dstregexplists_check_toggled(self, state):
+        self.dstRegexpListsLine.setEnabled(state)
+        self.selectListRegexpButton.setEnabled(state)
+
+    def _cb_dstiplists_check_toggled(self, state):
+        self.dstListIPsLine.setEnabled(state)
+        self.selectIPsListButton.setEnabled(state)
+
+    def _cb_dstnetlists_check_toggled(self, state):
+        self.dstListNetsLine.setEnabled(state)
+        self.selectNetsListButton.setEnabled(state)
+
     def _set_status_error(self, msg):
         self.statusLabel.setStyleSheet('color: red')
         self.statusLabel.setText(msg)
@@ -117,16 +159,42 @@ class RulesEditorDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
         self.statusLabel.setText(msg)
 
     def _cb_apply_clicked(self):
-        result, error = self._save_rule()
-        if result == False:
-            self._set_status_error(error)
-            return
         if self.nodesCombo.count() == 0:
             self._set_status_error(QC.translate("rules", "There're no nodes connected."))
             return
 
+        rule_name = self.ruleNameEdit.text()
+        if rule_name == "":
+            return
+
+        node = self.nodesCombo.currentText()
+        # avoid to overwrite rules when:
+        # - adding a new rule.
+        # - when a rule is renamed, i.e., the rule is edited or added and the
+        #   user changes the name.
+        if self.WORK_MODE == self.ADD_RULE and self._db.get_rule(rule_name, node).next() == True:
+            self._set_status_error(QC.translate("rules", "There's already a rule with this name."))
+            return
+        elif self.WORK_MODE == self.EDIT_RULE and rule_name != self._old_rule_name and \
+            self._db.get_rule(rule_name, node).next() == True:
+            self._set_status_error(QC.translate("rules", "There's already a rule with this name."))
+            return
+
+        result, error = self._save_rule()
+        if result == False:
+            self._set_status_error(error)
+            return
+
         self._add_rule()
-        self._delete_rule()
+        if self._old_rule_name != None and self._old_rule_name != self.rule.name:
+            self._delete_rule()
+
+        self._old_rule_name = rule_name
+
+        # after adding a new rule, we enter into EDIT mode, to allow further
+        # changes without closing the dialog.
+        if self.WORK_MODE == self.ADD_RULE:
+            self.WORK_MODE = self.EDIT_RULE
 
     @QtCore.pyqtSlot(ui_pb2.NotificationReply)
     def _cb_notification_callback(self, reply):
@@ -138,6 +206,43 @@ class RulesEditorDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
                 self._set_status_error(QC.translate("rules", "Error applying rule: {0}").format(reply.data))
 
             del self._notifications_sent[reply.id]
+
+    def _get_duration(self, duration_idx):
+        if duration_idx == 0:
+            return Config.DURATION_ONCE
+        elif duration_idx == 1:
+            return Config.DURATION_30s
+        elif duration_idx == 2:
+            return Config.DURATION_5m
+        elif duration_idx == 3:
+            return Config.DURATION_15m
+        elif duration_idx == 4:
+            return Config.DURATION_30m
+        elif duration_idx == 5:
+            return Config.DURATION_1h
+        elif duration_idx == 6:
+            return Config.DURATION_UNTIL_RESTART
+        else:
+            return Config.DURATION_ALWAYS
+
+    def _load_duration(self, duration):
+        if duration == Config.DURATION_ONCE:
+            return 0
+        elif duration == Config.DURATION_30s:
+            return 1
+        elif duration == Config.DURATION_5m:
+            return 2
+        elif duration == Config.DURATION_15m:
+            return 3
+        elif duration == Config.DURATION_30m:
+            return 4
+        elif duration == Config.DURATION_1h:
+            return 5
+        elif duration == Config.DURATION_UNTIL_RESTART:
+            return 6
+        else:
+            # always
+            return 7
 
     def _is_regex(self, text):
         charset="\\*{[|^?$"
@@ -189,6 +294,9 @@ class RulesEditorDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
         self.uidCheck.setChecked(False)
         self.uidLine.setText("")
 
+        self.pidCheck.setChecked(False)
+        self.pidLine.setText("")
+
         self.dstPortCheck.setChecked(False)
         self.dstPortLine.setText("")
 
@@ -202,6 +310,18 @@ class RulesEditorDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
         self.dstListsCheck.setChecked(False)
         self.dstListsLine.setText("")
 
+        self.selectListRegexpButton.setEnabled(False)
+        self.dstListRegexpCheck.setChecked(False)
+        self.dstRegexpListsLine.setText("")
+
+        self.selectIPsListButton.setEnabled(False)
+        self.dstListIPsCheck.setChecked(False)
+        self.dstListIPsLine.setText("")
+
+        self.selectNetsListButton.setEnabled(False)
+        self.dstListNetsCheck.setChecked(False)
+        self.dstListNetsLine.setText("")
+
     def _load_rule(self, addr=None, rule=None):
         if self._load_nodes(addr) == False:
             return False
@@ -213,14 +333,10 @@ class RulesEditorDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
             self.actionDenyRadio.setChecked(True)
         elif rule.action == Config.ACTION_ALLOW:
             self.actionAllowRadio.setChecked(True)
+        elif rule.action == Config.ACTION_REJECT:
+            self.actionRejectRadio.setChecked(True)
 
-        # TODO move to config.get_duration()
-        if self.rule.duration == Config.DURATION_UNTIL_RESTART:
-            self.durationCombo.setCurrentIndex(6)
-        elif self.rule.duration == Config.DURATION_ALWAYS:
-            self.durationCombo.setCurrentIndex(7)
-        else:
-            self.durationCombo.setCurrentText(self.rule.duration)
+        self.durationCombo.setCurrentIndex(self._load_duration(self.rule.duration))
 
         if self.rule.operator.type != Config.RULE_TYPE_LIST:
             self._load_rule_operator(self.rule.operator)
@@ -258,6 +374,11 @@ class RulesEditorDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
             self.uidLine.setEnabled(True)
             self.uidLine.setText(operator.data)
 
+        if operator.operand == "process.id":
+            self.pidCheck.setChecked(True)
+            self.pidLine.setEnabled(True)
+            self.pidLine.setText(operator.data)
+
         if operator.operand == "dest.port":
             self.dstPortCheck.setChecked(True)
             self.dstPortLine.setEnabled(True)
@@ -282,6 +403,24 @@ class RulesEditorDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
             self.dstListsLine.setText(operator.data)
             self.selectListButton.setEnabled(True)
 
+        if operator.operand == "lists.domains_regexp":
+            self.dstListRegexpCheck.setChecked(True)
+            self.dstListRegexpCheck.setEnabled(True)
+            self.dstRegexpListsLine.setText(operator.data)
+            self.selectListRegexpButton.setEnabled(True)
+
+        if operator.operand == "lists.ips":
+            self.dstListIPsCheck.setChecked(True)
+            self.dstListIPsCheck.setEnabled(True)
+            self.dstListIPsLine.setText(operator.data)
+            self.selectIPsListButton.setEnabled(True)
+
+        if operator.operand == "lists.nets":
+            self.dstListNetsCheck.setChecked(True)
+            self.dstListNetsCheck.setEnabled(True)
+            self.dstListNetsLine.setText(operator.data)
+            self.selectNetsListButton.setEnabled(True)
+
     def _load_nodes(self, addr=None):
         try:
             self.nodesCombo.clear()
@@ -293,7 +432,7 @@ class RulesEditorDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
                         QtWidgets.QMessageBox.Warning)
                 return False
 
-            if len(self._node_list) <= 1:
+            if len(self._node_list) < 2:
                 self.nodeApplyAllCheck.setVisible(False)
 
             for node in self._node_list:
@@ -342,21 +481,18 @@ class RulesEditorDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
 
     def _delete_rule(self):
         try:
-            if self._old_rule_name != None:
+            # if the rule name has changed, we need to remove the old one
+            if self._old_rule_name != self.rule.name:
+                node = self.nodesCombo.currentText()
+                old_rule = self.rule
+                old_rule.name = self._old_rule_name
+                if self.nodeApplyAllCheck.isChecked():
+                    nid, noti = self._nodes.delete_rule(rule_name=self._old_rule_name, addr=None, callback=self._notification_callback)
+                    self._notifications_sent[nid] = noti
+                else:
+                    nid, noti = self._nodes.delete_rule(self._old_rule_name, node, self._notification_callback)
+                    self._notifications_sent[nid] = noti
 
-                # if the rule name has changed, we need to remove the old one
-                if self._old_rule_name != self.rule.name:
-                    self._db.remove("DELETE FROM rules WHERE name='%s'" % self._old_rule_name)
-
-                    old_rule = self.rule
-                    old_rule.name = self._old_rule_name
-                    notif_delete = ui_pb2.Notification(type=ui_pb2.DELETE_RULE, rules=[old_rule])
-                    if self.nodeApplyAllCheck.isChecked():
-                        nid = self._nodes.send_notifications(notif_delete, self._notification_callback)
-                    else:
-                        nid = self._nodes.send_notification(self.nodesCombo.currentText(), notif_delete, self._notification_callback)
-
-                self._old_rule_name = None
         except Exception as e:
             print(self.LOG_TAG, "delete_rule() exception: ", e)
 
@@ -375,18 +511,14 @@ class RulesEditorDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
         self.rule.name = self.ruleNameEdit.text()
         self.rule.enabled = self.enableCheck.isChecked()
         self.rule.precedence = self.precedenceCheck.isChecked()
-        self.rule.action = Config.ACTION_DENY if self.actionDenyRadio.isChecked() else Config.ACTION_ALLOW
         self.rule.operator.type = Config.RULE_TYPE_SIMPLE
+        self.rule.action = Config.ACTION_DENY
+        if self.actionAllowRadio.isChecked():
+            self.rule.action = Config.ACTION_ALLOW
+        elif self.actionRejectRadio.isChecked():
+            self.rule.action = Config.ACTION_REJECT
 
-        # TODO: move to config.get_duration()
-        if self.durationCombo.currentIndex() == 0:
-            self.rule.duration = Config.DURATION_ONCE
-        elif self.durationCombo.currentIndex() == 6:
-            self.rule.duration = Config.DURATION_UNTIL_RESTART
-        elif self.durationCombo.currentIndex() == 7:
-            self.rule.duration = Config.DURATION_ALWAYS
-        else:
-            self.rule.duration = self.durationCombo.currentText()
+        self.rule.duration = self._get_duration(self.durationCombo.currentIndex())
 
         # FIXME: there should be a sensitive checkbox per operand
         self.rule.operator.sensitive = self.sensitiveCheck.isChecked()
@@ -533,6 +665,24 @@ class RulesEditorDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
                 if self._is_valid_regex(self.uidLine.text()) == False:
                     return False, QC.translate("rules", "User ID regexp error")
 
+        if self.pidCheck.isChecked():
+            if self.pidLine.text() == "":
+                return False, QC.translate("rules", "PID field can not be empty")
+
+            self.rule.operator.operand = "process.id"
+            self.rule.operator.data = self.pidLine.text()
+            rule_data.append(
+                    {
+                        'type': Config.RULE_TYPE_SIMPLE,
+                        'operand': 'process.id',
+                        'data': self.pidLine.text(),
+                        "sensitive": self.sensitiveCheck.isChecked()
+                        })
+            if self._is_regex(self.pidLine.text()):
+                rule_data[len(rule_data)-1]['type'] = Config.RULE_TYPE_REGEXP
+                if self._is_valid_regex(self.pidLine.text()) == False:
+                    return False, QC.translate("rules", "PID field regexp error")
+
         if self.dstListsCheck.isChecked():
             if self.dstListsLine.text() == "":
                 return False, QC.translate("rules", "Lists field cannot be empty")
@@ -550,16 +700,69 @@ class RulesEditorDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
                         })
             self.rule.operator.data = json.dumps(rule_data)
 
+        if self.dstListRegexpCheck.isChecked():
+            if self.dstRegexpListsLine.text() == "":
+                return False, QC.translate("rules", "Lists field cannot be empty")
+            if os.path.isdir(self.dstRegexpListsLine.text()) == False:
+                return False, QC.translate("rules", "Lists field must be a directory")
 
-        if len(rule_data) > 1:
+            self.rule.operator.type = Config.RULE_TYPE_LISTS
+            self.rule.operator.operand = "lists.domains_regexp"
+            rule_data.append(
+                    {
+                        'type': Config.RULE_TYPE_LISTS,
+                        'operand': 'lists.domains_regexp',
+                        'data': self.dstRegexpListsLine.text(),
+                        'sensitive': self.sensitiveCheck.isChecked()
+                        })
+            self.rule.operator.data = json.dumps(rule_data)
+
+        if self.dstListNetsCheck.isChecked():
+            if self.dstListNetsLine.text() == "":
+                return False, QC.translate("rules", "Lists field cannot be empty")
+            if os.path.isdir(self.dstListNetsLine.text()) == False:
+                return False, QC.translate("rules", "Lists field must be a directory")
+
+            self.rule.operator.type = Config.RULE_TYPE_LISTS
+            self.rule.operator.operand = "lists.nets"
+            rule_data.append(
+                    {
+                        'type': Config.RULE_TYPE_LISTS,
+                        'operand': 'lists.nets',
+                        'data': self.dstListNetsLine.text(),
+                        'sensitive': self.sensitiveCheck.isChecked()
+                        })
+            self.rule.operator.data = json.dumps(rule_data)
+
+
+        if self.dstListIPsCheck.isChecked():
+            if self.dstListIPsLine.text() == "":
+                return False, QC.translate("rules", "Lists field cannot be empty")
+            if os.path.isdir(self.dstListIPsLine.text()) == False:
+                return False, QC.translate("rules", "Lists field must be a directory")
+
+            self.rule.operator.type = Config.RULE_TYPE_LISTS
+            self.rule.operator.operand = "lists.ips"
+            rule_data.append(
+                    {
+                        'type': Config.RULE_TYPE_LISTS,
+                        'operand': 'lists.ips',
+                        'data': self.dstListIPsLine.text(),
+                        'sensitive': self.sensitiveCheck.isChecked()
+                        })
+            self.rule.operator.data = json.dumps(rule_data)
+
+        if len(rule_data) >= 2:
             self.rule.operator.type = Config.RULE_TYPE_LIST
             self.rule.operator.operand = Config.RULE_TYPE_LIST
             self.rule.operator.data = json.dumps(rule_data)
-        else:
+        elif len(rule_data) == 1:
             self.rule.operator.operand = rule_data[0]['operand']
             self.rule.operator.data = rule_data[0]['data']
             if self._is_regex(self.rule.operator.data):
                 self.rule.operator.type = Config.RULE_TYPE_REGEXP
+        else:
+            return False, QC.translate("rules", "Select at least one field.")
 
         if self.ruleNameEdit.text() == "":
             self.rule.name = slugify("%s %s %s" % (self.rule.action, self.rule.operator.type, self.rule.operator.data))
@@ -567,6 +770,7 @@ class RulesEditorDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
         return True, ""
 
     def edit_rule(self, records, _addr=None):
+        self.WORK_MODE = self.EDIT_RULE
         self._reset_state()
 
         self.rule = self.get_rule_from_records(records)
@@ -583,6 +787,7 @@ class RulesEditorDialog(QtWidgets.QDialog, uic.loadUiType(DIALOG_UI_PATH)[0]):
             self.show()
 
     def new_rule(self):
+        self.WORK_MODE = self.ADD_RULE
         self._reset_state()
         self._load_nodes()
         self.show()

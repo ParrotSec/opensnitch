@@ -116,11 +116,13 @@ func (l *Loader) loadRule(fileName string) error {
 	if r.Enabled {
 		if err := r.Operator.Compile(); err != nil {
 			log.Warning("Operator.Compile() error: %s: %s", err, r.Operator.Data)
+			return fmt.Errorf("(1) Error compiling rule: %s", err)
 		}
 		if r.Operator.Type == List {
 			for i := 0; i < len(r.Operator.List); i++ {
 				if err := r.Operator.List[i].Compile(); err != nil {
 					log.Warning("Operator.Compile() error: %s: ", err)
+					return fmt.Errorf("(1) Error compiling list rule: %s", err)
 				}
 			}
 		}
@@ -275,6 +277,7 @@ func (l *Loader) replaceUserRule(rule *Rule) (err error) {
 	if rule.Enabled {
 		if err := rule.Operator.Compile(); err != nil {
 			log.Warning("Operator.Compile() error: %s: %s", err, rule.Operator.Data)
+			return fmt.Errorf("(2) Error compiling rule: %s", err)
 		}
 
 		if rule.Operator.Type == List {
@@ -286,6 +289,7 @@ func (l *Loader) replaceUserRule(rule *Rule) (err error) {
 			for i := 0; i < len(rule.Operator.List); i++ {
 				if err := rule.Operator.List[i].Compile(); err != nil {
 					log.Warning("Operator.Compile() error: %s: ", err)
+					return fmt.Errorf("(2) Error compiling list rule: %s", err)
 				}
 			}
 		}
@@ -404,7 +408,7 @@ func (l *Loader) FindFirstMatch(con *conman.Connection) (match *Rule) {
 			// Save the rule in order to don't ask the user to take action,
 			// and keep iterating until a Deny or a Priority rule appears.
 			match = rule
-			if rule.Action == Deny || rule.Precedence == true {
+			if rule.Action == Reject || rule.Action == Deny || rule.Precedence == true {
 				return rule
 			}
 		}
